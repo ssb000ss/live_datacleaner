@@ -1,0 +1,17 @@
+/* Контейнер заполняет весь экран */
+html, body, [data-testid="stAppViewContainer"] {
+    height: 100vh; /* Занимаем 100% высоты экрана */
+}
+
+h1 {
+    text-align: center;
+}
+/* Центрируем содержимое */
+.block-container {
+    max-width: 70%;
+    padding-left: 5%;
+    display: flex;
+    flex-direction: column;
+    justify-content: right; /* Центр по вертикали */
+    height: 100vh; /* Заполняем всю высоту */
+}
