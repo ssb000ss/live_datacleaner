@@ -32,38 +32,20 @@ file_path = st.text_input("Введите путь к CSV-файлу:")
 if file_path:
     df = load_data(file_path)
     columns_data = df.columns
-    st.session_state.columns_data = new_column_name
     text = st.write('Debug')
 
     if df is not None:
         st.divider()
         st.subheader("📋 Данные с предустановленными правилами очистки")
         col1, col2, col3 = st.columns([1, 1, 3])
-        annotated_text(
-            "This ",
-            ("is", "Verb"),
-            " some ",
-            ("annotated", "Adj"),
-            ("text", "Noun"),
-            " for those of ",
-            ("you", "Pronoun"),
-            " who ",
-            ("like", "Verb"),
-            " this sort of ",
-            ("thing", "Noun"),
-            ". ",
-            "And here's a ",
-            ("word", ""),
-            " with a fancy background but no label.",
-        )
-
 
         with col1:
             column = st.selectbox("Выберите колонку для очистки", df.columns)
 
         if "column_names" not in st.session_state:
             # Изначально заголовки такие же
-            st.write(st.session_state.column_names)
+            st.session_state.column_names = {col: col for col in df.columns}
+
 
         with col2:
             new_column_name = st.text_input("Новое название колонки", value=st.session_state.column_names[column])
