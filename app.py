@@ -1,66 +1,43 @@
-import pandas as pd
 import streamlit as st
-from annotated_text import annotated_text
-
-from utils.file_utils import load_data
-from utils.data_cleaning import safe_exec, combine_regex
-
-st.set_page_config(page_title="Интерактивная очистка CSV", page_icon="📊")
-
-
-def load_css(file_path):
-    with open(file_path, "r") as f:
-        css = f.read()
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-
-load_css("static/style.css")
-
-# Заголовок
-st.title("🚀 Интерактивная очистка CSV")
-
-PRESET_REGEX = {
-    "Цифры": r"\d+",
-    "Спецсимволы": r"[^\w\s]",
-    "Удалить пробелы в начале и конце": r"^\s+|\s+$",
-    "Оставить только буквы": r"[^a-zA-Zа-яА-ЯёЁ\s]",
-}
-
-# Ввод пути к файлу
-file_path = st.text_input("Введите путь к CSV-файлу:")
-
-if file_path:
-    df = load_data(file_path)
-    columns_data = df.columns
-    text = st.write('Debug')
-
-    if df is not None:
-        st.divider()
-        st.subheader("📋 Данные с предустановленными правилами очистки")
-        col1, col2, col3 = st.columns([1, 1, 3])
-
-        with col1:
-            column = st.selectbox("Выберите колонку для очистки", df.columns)
-
-        if "column_names" not in st.session_state:
-            # Изначально заголовки такие же
-            st.session_state.column_names = {col: col for col in df.columns}
+import extra_streamlit_components as stx  # Исправленный импорт для stepper_bar
+from utils.ui_utils import load_css, display_table
+from steps import (
+    initialize_session_state,
+    step_load_file,
+    step_process_column_names,
+    step_concatenate_columns,
+    step_deduplicate_validate,
+    step_export,
+    step_regex_content, step_exclude_columns
+)
+from utils import config
 
 
-        with col2:
-            new_column_name = st.text_input("Новое название колонки", value=st.session_state.column_names[column])
+def main():
+    st.set_page_config(page_title=config.APP_TITLE, page_icon=config.PAGE_ICON)
+    load_css(config.CSS_PATH)
+    st.title(config.APP_TITLE)
+    initialize_session_state()
 
-        with col3:
-            st.write("Выберите регулярные выражения:")
-            selected_regex_keys = [name for name in PRESET_REGEX if st.checkbox(name, key=f"{column}_{name}")]
+    current_step = stx.stepper_bar(steps=config.STEPS)
 
-        st.session_state.column_names[column] = new_column_name
+    if current_step == 0:
+        step_load_file()
+    elif current_step == 1 and st.session_state.df is not None:
+        step_process_column_names()
+    elif current_step == 2 and st.session_state.df is not None:
+        step_exclude_columns()
+    elif current_step == 3 and st.session_state.df is not None:
+        step_regex_content()
+    elif current_step == 4 and st.session_state.df is not None:
+        step_concatenate_columns()
+    elif current_step == 5 and st.session_state.df is not None:
+        step_deduplicate_validate()
+    elif current_step == 6 and st.session_state.df is not None:
+        step_export()
 
-        if selected_regex_keys:
-            regex_pattern = combine_regex(selected_regex_keys, PRESET_REGEX)
-            df[column] = df[column].astype(str).str.findall(regex_pattern).str.join("")
+    display_table()
 
-        st.divider()
-        df = df.rename(columns=st.session_state.column_names)
 
-        st.dataframe(df.head(25), use_container_width=True, height=700)
+if __name__ == "__main__":
+    main()
