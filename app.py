@@ -24,13 +24,13 @@ def main():
     if current_step == 0:
         step_load_file()
     elif current_step == 1 and st.session_state.df is not None:
-        step_process_column_names()
-    elif current_step == 2 and st.session_state.df is not None:
         step_exclude_columns()
-    elif current_step == 3 and st.session_state.df is not None:
-        step_regex_content()
-    elif current_step == 4 and st.session_state.df is not None:
+    elif current_step == 2 and st.session_state.df is not None:
         step_concatenate_columns()
+    elif current_step == 3 and st.session_state.df is not None:
+        step_process_column_names()
+    elif current_step == 4 and st.session_state.df is not None:
+        step_regex_content()
     elif current_step == 5 and st.session_state.df is not None:
         step_deduplicate_validate()
     elif current_step == 6 and st.session_state.df is not None:
