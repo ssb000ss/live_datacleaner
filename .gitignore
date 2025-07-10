@@ -178,3 +178,8 @@ cython_debug/
 
 # mac os
 .DS_Store
+
+/exports
+/logs
+/parquet_cache
+/analyze_cache
