@@ -1,84 +1,65 @@
-import pandas as pd
 import streamlit as st
-from annotated_text import annotated_text
+import extra_streamlit_components as stx
 
-from utils.file_utils import load_data
-from utils.data_cleaning import safe_exec, combine_regex
+from utils.data_cleaner import PatternDetector
+from utils.data_utils import DataLoader
+from utils.file_manager import FileManager
+from utils.logger import init_logger
+from utils.ui_utils import load_css, display_table
+from steps import (
+    process_load_file, process_exclude_columns,
+    process_analyze_file, process_concatenate_columns,
+    process_column_names, process_regex_content,
+    process_removing_duplicates, process_export, process_regex_formating
+)
+from utils import config
 
-st.set_page_config(page_title="Интерактивная очистка CSV", page_icon="📊")
+if "logger" not in st.session_state:
+    st.session_state.logger = init_logger(config.LOG_FOLDER, config.APP_TITLE)
 
+logger = st.session_state.logger
 
-def load_css(file_path):
-    with open(file_path, "r") as f:
-        css = f.read()
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
-
-load_css("static/style.css")
-
-# Заголовок
-st.title("🚀 Интерактивная очистка CSV")
-
-PRESET_REGEX = {
-    "Цифры": r"\d+",
-    "Спецсимволы": r"[^\w\s]",
-    "Удалить пробелы в начале и конце": r"^\s+|\s+$",
-    "Оставить только буквы": r"[^a-zA-Zа-яА-ЯёЁ\s]",
+step_functions = {
+    0: process_load_file.step_load_file,
+    1: process_analyze_file.analyze_file,
+    2: process_exclude_columns.step_exclude_columns,
+    3: process_concatenate_columns.step_concatenate_columns,
+    4: process_column_names.step_process_column_names,
+    5: process_regex_content.step_regex_content,
+    6: process_regex_formating.step_format_column_values,
+    7: process_removing_duplicates.run_full_cleaning,
+    8: process_export.step_export_file,
 }
 
-# Ввод пути к файлу
-file_path = st.text_input("Введите путь к CSV-файлу:")
 
-if file_path:
-    df = load_data(file_path)
-    columns_data = df.columns
-    st.session_state.columns_data = new_column_name
-    text = st.write('Debug')
-
-    if df is not None:
-        st.divider()
-        st.subheader("📋 Данные с предустановленными правилами очистки")
-        col1, col2, col3 = st.columns([1, 1, 3])
-        annotated_text(
-            "This ",
-            ("is", "Verb"),
-            " some ",
-            ("annotated", "Adj"),
-            ("text", "Noun"),
-            " for those of ",
-            ("you", "Pronoun"),
-            " who ",
-            ("like", "Verb"),
-            " this sort of ",
-            ("thing", "Noun"),
-            ". ",
-            "And here's a ",
-            ("word", ""),
-            " with a fancy background but no label.",
-        )
+def initialize_session_state():
+    if "initialized" not in st.session_state:
+        logger.info("Инициализация приложения...")
+        st.session_state.pattern_detector = PatternDetector()
+        st.session_state.file_manager = FileManager()
+        st.session_state.loader = DataLoader(config.PARQUET_FOLDER)
+        st.session_state.initialized = True
+        st.session_state.files = {}
+        logger.info("Инициализация завершена.")
+    else:
+        logger.info("Инициализация уже выполнена, пропускаем.")
 
 
-        with col1:
-            column = st.selectbox("Выберите колонку для очистки", df.columns)
+def main():
+    st.set_page_config(page_title=config.APP_TITLE, page_icon=config.PAGE_ICON)
+    load_css(config.CSS_PATH)
+    st.title(config.APP_TITLE)
+    if "initialized" not in st.session_state:
+        initialize_session_state()
 
-        if "column_names" not in st.session_state:
-            # Изначально заголовки такие же
-            st.write(st.session_state.column_names)
+    current_step = stx.stepper_bar(steps=config.STEPS)
 
-        with col2:
-            new_column_name = st.text_input("Новое название колонки", value=st.session_state.column_names[column])
+    step_func = step_functions.get(current_step)
+    if step_func:
+        step_func()
+    if "df" in st.session_state and current_step > 1 and current_step != 1:
+        display_table()
 
-        with col3:
-            st.write("Выберите регулярные выражения:")
-            selected_regex_keys = [name for name in PRESET_REGEX if st.checkbox(name, key=f"{column}_{name}")]
 
-        st.session_state.column_names[column] = new_column_name
-
-        if selected_regex_keys:
-            regex_pattern = combine_regex(selected_regex_keys, PRESET_REGEX)
-            df[column] = df[column].astype(str).str.findall(regex_pattern).str.join("")
-
-        st.divider()
-        df = df.rename(columns=st.session_state.column_names)
-
-        st.dataframe(df.head(25), use_container_width=True, height=700)
+if __name__ == "__main__":
+    main()
