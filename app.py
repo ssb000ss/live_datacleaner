@@ -28,7 +28,7 @@ step_functions = {
     5: process_regex_content.step_regex_content,
     6: process_regex_formating.step_format_column_values,
     7: process_removing_duplicates.run_full_cleaning,
-    8: process_export.step_export_file
+    8: process_export.step_export_file,
 }
 
 

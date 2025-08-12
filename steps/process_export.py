@@ -59,15 +59,20 @@ def step_export_file():
             target_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Экспортная директория: {target_dir.resolve()}")
 
-            ldf = st.session_state.lazy_df.collect()
-            ldf = rename_columns(ldf)
+            # ⚠️ Все действия в ленивом режиме ДО collect()
+            ldf = rename_columns(st.session_state.lazy_df)
+
+            st.info("🔄 Загружаем данные в память...")
+            df = ldf.collect()
+            st.write(f"✅ Загружено строк: {df.height}, колонок: {df.width}")
 
             if export_format == "parquet":
-                rows_per_chunk = estimate_rows_per_chunk(ldf, max_file_size_mb)
-                num_chunks = (ldf.height + rows_per_chunk - 1) // rows_per_chunk
+                rows_per_chunk = estimate_rows_per_chunk(df, max_file_size_mb)
+                num_chunks = (df.height + rows_per_chunk - 1) // rows_per_chunk
+                st.write(f"🔢 Предполагаемое количество файлов: {num_chunks} (по {rows_per_chunk} строк)")
 
                 for i in range(num_chunks):
-                    chunk = ldf.slice(i * rows_per_chunk, rows_per_chunk)
+                    chunk = df.slice(i * rows_per_chunk, rows_per_chunk)
                     filename = target_dir / f"{original_name}_part_{i + 1}.parquet"
                     chunk.write_parquet(
                         filename,
@@ -78,7 +83,7 @@ def step_export_file():
 
             elif export_format == "csv":
                 filename = target_dir / f"{original_name}.csv"
-                ldf.write_csv(
+                df.write_csv(
                     file=filename,
                     separator="|"
                 )
@@ -90,17 +95,21 @@ def step_export_file():
 
 
 def estimate_rows_per_chunk(df: pl.DataFrame, target_mb: int) -> int:
-    # Оцениваем размер 10,000 строк с компрессией
-    sample_size = min(10_000, df.height)
-    sample = df.head(sample_size)
-    sample_path = "/tmp/sample_export.parquet"
-    sample.write_parquet(sample_path, compression="zstd")
+    try:
+        sample_size = min(10_000, df.height)
+        sample = df.head(sample_size)
 
-    size_mb = os.path.getsize(sample_path) / 1024 / 1024
-    os.remove(sample_path)
+        sample_path = "/tmp/sample_export.parquet"
+        sample.write_parquet(sample_path, compression="zstd")
+        size_mb = os.path.getsize(sample_path) / 1024 / 1024
+        os.remove(sample_path)
 
-    if size_mb == 0:
-        return df.height
+        if size_mb == 0:
+            return max(df.height // 4, 100_000)  # безопасный дефолт
 
-    rows_per_mb = sample_size / size_mb
-    return max(int(rows_per_mb * target_mb), 1)
+        rows_per_mb = sample_size / size_mb
+        return max(int(rows_per_mb * target_mb), 10_000)  # не меньше 10k
+
+    except Exception as e:
+        logger.warning(f"Не удалось оценить размер чанка: {e}")
+        return max(df.height // 4, 100_000)  # запасной вариант
