@@ -64,7 +64,6 @@ def step_load_file():
                             st.session_state.df = st.session_state.origin_df.clone()
                             show_table()
                             st.success(f"Файл [{file_path.name}] успешно переформатирован и загружен!")
-                            # Блокируем кнопку до смены файла
                             st.session_state.format_locked = True
                     except Exception as e:
                         logger.exception("Error during file processing")
