@@ -180,14 +180,20 @@ def run_full_cleaning():
 
     if st.button("🚀 Начать полный процессинг"):
         with st.spinner("Обработка данных..."):
-            ldf = apply_column_cleaning_pipeline(ldf, columns_metadata)
+            logger = logging.getLogger(config.APP_TITLE)
+            try:
+                ldf = apply_column_cleaning_pipeline(ldf, columns_metadata)
 
-            ldf = drop_duplicates(ldf, unique_columns)
+                ldf = drop_duplicates(ldf, unique_columns)
 
-            ldf = drop_null_rows(ldf, not_empty_columns)
+                ldf = drop_null_rows(ldf, not_empty_columns)
 
-            st.session_state.lazy_df = ldf
+                st.session_state.lazy_df = ldf
 
-            st.session_state.df = ldf.collect().head(1000)
+                # Получаем превью без полной materialization всего датасета
+                st.session_state.df = ldf.fetch(1000)
 
-            st.success("Обработка завершена!")
+                st.success("Обработка завершена!")
+            except Exception as e:
+                logger.exception("Ошибка при выполнении полного процессинга")
+                st.error(f"Ошибка при выполнении процессинга: {e}")

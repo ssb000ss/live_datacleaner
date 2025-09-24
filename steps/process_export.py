@@ -1,4 +1,5 @@
 import os
+import csv
 import logging
 from pathlib import Path
 
@@ -22,10 +23,21 @@ def rename_columns(ldf: pl.LazyFrame) -> pl.LazyFrame:
         if data.get("mode") != "exclude" and col in ldf.collect_schema()
     ]
 
-    rename_map = {
-        col: columns_data[col]["display_name"]
-        for col in included_columns
-    }
+    # Формируем безопасные имена столбцов с учётом возможного отсутствия display_name и дублей
+    safe_names = []
+    used = set()
+    for col in included_columns:
+        base_name = columns_data.get(col, {}).get("display_name", col) or col
+        name = base_name
+        idx = 2
+        # обеспечим уникальность имён
+        while name in used:
+            name = f"{base_name}_{idx}"
+            idx += 1
+        used.add(name)
+        safe_names.append((col, name))
+
+    rename_map = {orig: new for orig, new in safe_names}
 
     renamed_ldf = ldf.select(included_columns).rename(rename_map)
 
@@ -51,6 +63,9 @@ def step_export_file():
             "Максимальный размер одного файла (МБ):", min_value=10, max_value=1000, value=100, step=10
         )
         compression = st.selectbox("Сжатие Parquet:", ["zstd", "snappy", "gzip", "none"], index=0)
+    elif export_format == "csv":
+        csv_delimiter = st.text_input("Разделитель CSV:", value="|")
+        csv_quote_all = st.checkbox("Заключать все поля в кавычки", value=True)
 
     if st.button("Экспортировать"):
         try:
@@ -83,10 +98,38 @@ def step_export_file():
 
             elif export_format == "csv":
                 filename = target_dir / f"{original_name}.csv"
-                df.write_csv(
-                    file=filename,
-                    separator="|"
-                )
+
+                # Заменяем переводы строк внутри текстовых полей, чтобы строки не переносились
+                try:
+                    string_cols = [col for col, dtype in df.schema.items() if dtype == pl.Utf8]
+                except AttributeError:
+                    # Fallback для старых версий polars
+                    string_cols = [col for col in df.columns if pl.datatypes.is_utf8(df[col].dtype)]
+
+                if string_cols:
+                    df = df.with_columns([
+                        pl.col(c)
+                        .str.replace_all("\r\n", " ")
+                        .str.replace_all("\n", " ")
+                        .str.replace_all("\r", " ")
+                        .alias(c)
+                        for c in string_cols
+                    ])
+
+                # Пишем CSV вручную, чтобы обеспечить нужный разделитель и кавычки
+                with open(filename, 'w', encoding='utf-8-sig', newline='') as f:
+                    writer = csv.writer(
+                        f,
+                        delimiter=csv_delimiter,
+                        quoting=csv.QUOTE_ALL if csv_quote_all else csv.QUOTE_MINIMAL,
+                        lineterminator='\n'
+                    )
+                    # Заголовок
+                    writer.writerow(df.columns)
+                    # Строки
+                    for row in df.iter_rows():
+                        safe_row = ["" if v is None else v for v in row]
+                        writer.writerow(safe_row)
                 st.success(f"✅ Данные экспортированы в CSV: `{filename}`")
 
         except Exception as e:
