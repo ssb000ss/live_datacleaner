@@ -115,7 +115,8 @@ def apply_column_cleaning_pipeline(
         concatenated = meta.get("concatenated")
         selected_patterns = meta.get("selected_patterns", [])
         detector = st.session_state.pattern_detector
-        pattern = detector.combine_regex(selected_patterns).pattern
+        compiled_pattern = detector.combine_regex(selected_patterns)
+        pattern = compiled_pattern.pattern if compiled_pattern else ""
 
         if not concatenated:
             ldf = clean_columns(
