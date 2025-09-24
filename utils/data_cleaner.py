@@ -70,7 +70,8 @@ def file_contains_quotes(path: Path, encoding="utf-8", max_lines: int = 20) -> b
 
 
 def clean_special_chars(ldf: pl.LazyFrame) -> pl.LazyFrame:
-    for col in ldf.collect_schema().names():
+    cols = ldf.collect_schema().names()
+    for col in cols:
         ldf = ldf.with_columns([
             pl.col(col).cast(pl.Utf8).alias(col)
         ])
@@ -86,7 +87,7 @@ def clean_special_chars(ldf: pl.LazyFrame) -> pl.LazyFrame:
     for pattern, repl in rules:
         ldf = ldf.with_columns([
             pl.col(col).str.replace_all(pattern, repl).alias(col)
-            for col in ldf.collect_schema().names()
+            for col in cols
         ])
 
     return ldf
