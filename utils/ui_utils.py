@@ -99,7 +99,9 @@ def display_table():
         renamed_df = filtered_df.rename(renamed_columns)
 
         st.divider()
-        st.dataframe(renamed_df.to_pandas(), use_container_width=True)
+        # Ограничиваем размер превью, чтобы избежать OOM в браузере
+        preview_rows = min(1000, renamed_df.height)
+        st.dataframe(renamed_df.head(preview_rows).to_pandas(), use_container_width=True)
 
     except Exception as e:
         st.error(f"Ошибка отображения таблицы: {e}")
