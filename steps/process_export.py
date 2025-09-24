@@ -117,7 +117,7 @@ def step_export_file():
                     ])
 
                 # Пишем CSV вручную, чтобы обеспечить нужный разделитель и кавычки
-                with open(filename, 'w', encoding='utf-8-sig', newline='') as f:
+                with open(filename, 'w', encoding='utf-8', newline='') as f:
                     writer = csv.writer(
                         f,
                         delimiter=csv_delimiter,
