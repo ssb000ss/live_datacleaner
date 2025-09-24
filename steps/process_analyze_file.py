@@ -78,7 +78,7 @@ def analyze_columns(
                     for name, pattern in pattern_detector.regex_patterns.items()
                 ]
                 # Собираем только скалярные результаты (True/False для каждого паттерна)
-                result_df = lazy_df.select(exprs).collect(streaming=True)
+                result_df = lazy_df.select(exprs).collect()
                 detected_patterns = {name for name in result_df.columns if bool(result_df[0, name])}
             except Exception as e:
                 logger.error(f"Failed pattern detection for column '{column}': {e}")
