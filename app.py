@@ -26,9 +26,9 @@ step_functions = {
     3: process_concatenate_columns.step_concatenate_columns,
     4: process_column_names.step_process_column_names,
     5: process_regex_content.step_regex_content,
-    6: process_regex_formating.step_format_column_values,
-    7: process_removing_duplicates.run_full_cleaning,
-    8: process_export.step_export_file,
+    # 6: process_regex_formating.step_format_column_values,
+    6: process_removing_duplicates.run_full_cleaning,
+    7: process_export.step_export_file,
 }
 
 

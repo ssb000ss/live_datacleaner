@@ -13,7 +13,7 @@ class FileManager:
         self.delimiter = None
 
     def detect_delimiter(self, file_path: Path):
-        with open(file_path, 'r', encoding=self.encoding or 'utf-8') as f:
+        with open(file_path, 'r', encoding=self.encoding or 'utf8') as f:
             logger.info(f"Detecting delimiter [{file_path.name}].")
             sample = f.read(5000)
             sniffer = csv.Sniffer()
@@ -24,7 +24,15 @@ class FileManager:
             logger.info(f"Detecting encoding [{file_path.name}].")
             rawdata = f.read(sample_size)
             info = chardet.detect(rawdata)
-            self.encoding = info['encoding'] or "utf-8"
+            detected_encoding = info['encoding'] or "utf-8"
+            
+            # Конвертируем кодировки для совместимости с Polars
+            if detected_encoding.lower() in ['utf-8', 'utf8']:
+                self.encoding = "utf8"
+            elif detected_encoding.lower() == 'ascii':
+                self.encoding = "utf8"  # ASCII является подмножеством UTF-8
+            else:
+                self.encoding = "utf8-lossy"  # Для других кодировок используем lossy режим
 
     def get_extension(self, file_path: Path):
         return f".{file_path.name.rsplit('.', 1)[-1].lower()}" if '.' in file_path.name else ""

@@ -59,6 +59,12 @@ def step_load_file():
                                 st.session_state.encoding,
                                 st.session_state.delimiter
                             )
+                            
+                            if lazy_df is None:
+                                st.error("Не удалось загрузить файл. Возможно, недостаточно памяти или файл поврежден.")
+                                logger.error("Failed to load data - lazy_df is None")
+                                return
+                            
                             st.session_state.lazy_df = lazy_df
                             st.session_state.origin_df = lazy_df.limit(5000).collect()
                             st.session_state.df = st.session_state.origin_df.clone()

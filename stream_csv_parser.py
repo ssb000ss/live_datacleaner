@@ -26,16 +26,21 @@ def detect_encoding(file_path: Path, sample_size: int = 10000) -> str:
         with open(file_path, "rb") as f:
             raw_data = f.read(sample_size)
             result = chardet.detect(raw_data)
-            encoding = result['encoding'] or 'utf-8'
+            detected_encoding = result['encoding'] or 'utf-8'
 
-            if encoding.lower() == 'ascii':
-                encoding = 'utf-8'
+            # Конвертируем кодировки для совместимости с Polars
+            if detected_encoding.lower() in ['utf-8', 'utf8']:
+                encoding = 'utf8'
+            elif detected_encoding.lower() == 'ascii':
+                encoding = 'utf8'  # ASCII является подмножеством UTF-8
+            else:
+                encoding = 'utf8-lossy'  # Для других кодировок используем lossy режим
 
-            logger.info(f"✅ Определена кодировка: {encoding}")
+            logger.info(f"✅ Определена кодировка: {encoding} (исходная: {detected_encoding})")
             return encoding
     except Exception as e:
-        logger.warning(f"⚠️ Ошибка определения кодировки: {e}. Используем utf-8")
-        return 'utf-8'
+        logger.warning(f"⚠️ Ошибка определения кодировки: {e}. Используем utf8")
+        return 'utf8'
 
 
 def detect_delimiter(file_path: Path, encoding: str, max_lines: int = 30) -> str:

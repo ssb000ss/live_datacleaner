@@ -29,6 +29,10 @@ def step_format_column_values():
     lazy_df = st.session_state.lazy_df
     columns_data = st.session_state.columns_data
 
+    if lazy_df is None:
+        st.error("Данные не загружены")
+        return
+
     # Выбор колонки для форматирования
     target_column = st.selectbox(
         "Выберите колонку для форматирования:",

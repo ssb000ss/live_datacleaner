@@ -59,6 +59,10 @@ def analyze_columns(
 
     logger.info(f"Starting column analysis for file: {source_path}")
     try:
+        if lazy_df is None:
+            st.error("Данные не загружены для анализа")
+            return
+            
         # Получаем список колонок без materialize всего набора данных
         column_names = list(lazy_df.collect_schema().names())
         total_columns = len(column_names)

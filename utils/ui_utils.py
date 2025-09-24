@@ -48,6 +48,11 @@ def show_table():
     ):
         source_file = st.session_state.source_file
         lazy_df = st.session_state.lazy_df
+        
+        if lazy_df is None:
+            st.error("Данные не загружены")
+            return
+            
         file_info = {
             "Название": source_file.name,
             "Путь": str(source_file),
