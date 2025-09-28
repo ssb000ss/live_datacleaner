@@ -1,0 +1,359 @@
+# Project Refactor Plan: Two-Block Architecture (UI/Preparation) and CLI Processing
+
+Version: 1.0
+Branch: feature/polars-optimizations
+Owner: live_datacleaner
+
+============================================================
+Block 1 — UI / Preparation (Streamlit)
+============================================================
+Goal: Make UI lightweight and responsive. All heavy processing is excluded from Streamlit. UI works only with first 10,000 rows for preview and workflow building, while analysis remains lazy over the full dataset.
+
+High-level outputs:
+- Parquet cache: parquet_cache/<stem>.parquet (written via sink_parquet)
+- Analyze cache: analyze_cache/<stem>/columns_data.json (full-file lazy analysis)
+- Workflow file: analyze_cache/<stem>/workflow.json (built from UI interactions on 10k sample)
+
+Core Rules:
+- After successful analysis (full-file), collect a 10k preview window to be used by all UI steps (exclude, rename, concat, regex selections). Do not run heavy transforms on the whole dataset in UI.
+- Defaults for export in workflow:
+  - Default export format: parquet with batching
+  - Default CSV delimiter: "~"
+  - Default CSV quoting: QUOTE_ALL (i.e., all fields quoted with ")
+  - Default parquet compression: zstd
+  - Minimal user-facing settings; sensible defaults are pre-filled.
+
+Detailed Plan
+
+1) Loading & Reformat to Parquet (lightweight)
+- Add/ensure DataLoader uses sink_parquet to persist the lazy CSV scan as parquet cache when requested (ignore cache flag or first time).
+- Preserve current lazy cleaning of header quotes and string quotes, but make it configurable later.
+- Artifacts:
+  - parquet_cache/<stem>.parquet
+
+2) Full-file Lazy Analysis (patterns by column)
+- Keep current approach (select of .any() over regex per column) on LazyFrame; no materialization of full data.
+- Cache columns_data.json at analyze_cache/<stem>/columns_data.json with file hash + schema check.
+
+3) UI Sample Window (10k rows)
+- After analysis is completed, compute a preview window:
+  - origin_df = lazy_df.limit(10_000).collect(engine="streaming")
+  - df (working copy) = origin_df.clone()
+- All subsequent interactive UI steps MUST apply only to df/origin_df for preview and to build workflow.json — not to lazy_df.
+- Optional diagnostics: lazy_df.explain(streaming=true) to verify streaming compatibility of transformations.
+
+4) Interactive Steps Working on 10k Preview
+- Exclude Columns:
+  - Toggle modes for columns: standalone | exclude (stored in columns_data state)
+- Display Names:
+  - Allow edits; ensure uniqueness (auto-suffix _2, _3 if conflicts)
+- Concatenations:
+  - Define concatenations: name, source_columns[], separator (string). Show preview using df only.
+- Regex Content Cleaning (Selection):
+  - For each column, allow selecting patterns from detected. Apply to preview df to demonstrate effect (no lazy_df changes).
+
+5) Build Workflow JSON
+- Structure (stored at analyze_cache/<stem>/workflow.json):
+  {
+    "version": "1.0",
+    "source": {
+      "parquet_path": "parquet_cache/<stem>.parquet",
+      "file_hash": "<sha256>",
+      "schema": ["col1", "col2", ...]
+    },
+    "columns": {
+      "standalone": ["col1", ...],
+      "exclude": ["colX", ...]
+    },
+    "display_names": {
+      "col1": "Display Name 1",
+      ...
+    },
+    "concatenations": [
+      { "name": "full_name", "source_columns": ["last", "first"], "separator": " " }
+    ],
+    "regex_rules": {
+      "col1": ["cyrillic_common", "space"],
+      ...
+    },
+    "pipeline_flags": {
+      "to_lowercase": true,
+      "nullify_empty": true,
+      "empty_value": null
+    },
+    "dedup": {
+      "unique_columns": ["email"]
+    },
+    "not_empty": {
+      "columns": ["email"]
+    },
+    "export": {
+      "format": "parquet",                // default
+      "parquet": { "compression": "zstd", "target_mb_per_file": 100 },
+      "csv": { "delimiter": "~", "quote_all": true },
+      "output_dir": "exports/<stem>"
+    }
+  }
+- UI button “Сохранить workflow” writes workflow.json.
+- UI provides a read-only summary of planned operations and a copy-paste CLI command.
+
+6) UI Button Behavior Change
+- Replace the heavy “🚀 Начать полный процессинг” action with:
+  - Option A: Only save workflow and display CLI usage (recommended).
+  - Option B: Offer a small helper to copy the exact CLI command (no processing in UI).
+
+7) Documentation & Hints in UI
+- After saving workflow: show
+  - CLI example: python cli_process.py --path parquet_cache/<stem>.parquet --analyze_cache analyze_cache/<stem>/columns_data.json --workflow analyze_cache/<stem>/workflow.json
+- Minimal knobs: format (parquet default), CSV delimiter default ~, quote_all true, parquet compression zstd. Advanced options hidden or deferred to CLI.
+
+
+============================================================
+Block 2 — CLI / Processing
+============================================================
+Goal: Execute the full cleaning-transform-export workflow in the most performant way, detached from Streamlit. Inputs: parquet path, analyze_cache.json, workflow.json.
+
+Command-line
+- Script: cli_process.py
+- Usage:
+  python cli_process.py \
+    --path parquet_cache/<stem>.parquet \
+    --analyze_cache analyze_cache/<stem>/columns_data.json \
+    --workflow analyze_cache/<stem>/workflow.json
+
+Inputs & Validation
+- Ensure all files exist.
+- Load workflow.json; check version.
+- Load analyze_cache.json; ensure schema compatibility.
+- Optionally, verify file_hash if provided.
+
+Processing Pipeline (Lazy Polars)
+1) Load
+- ldf = pl.scan_parquet(<path>)
+- Optional diagnostics: print(ldf.explain(streaming=True)) for plan inspection on large runs.
+
+2) Column Modes
+- exclude = workflow.columns.exclude
+- standalone = workflow.columns.standalone
+- ldf = ldf.drop(exclude) if exclude else ldf
+
+3) Global Pre-cleaning
+- ldf = clean_special_chars(ldf)
+- ldf = normalize_whitespace(ldf)
+
+4) Regex Cleaning per Column
+- For each target column in standalone and in concatenation source_columns:
+  - Translate keys → combined regex string using REGEX_PATTERNS_UNICODE
+  - Use clean_columns-like approach:
+    - cast Utf8 (strict=False), fill_null("")
+    - str.extract_all(pattern).list.eval(filter len>0).list.join("").fill_null("").cast(Utf8)
+- Apply pipeline flags:
+  - to_lowercase: lowercase_columns(ldf, columns)
+  - nullify_empty: replace_empty_with(ldf, value=empty_value)
+
+5) Concatenations
+- For each op: pl.concat_str([...], separator).alias(name)
+- Add to ldf after related source columns cleaned.
+
+6) Not Empty / Dedup
+- If workflow.not_empty.columns: ldf = ldf.drop_nulls(subset=[...])
+- If workflow.dedup.unique_columns: ldf = ldf.unique(subset=[...])
+
+7) Display Name Renaming (safe)
+- Build rename map from display_names, ensure uniqueness (append _2, _3)
+- ldf = ldf.select(final_columns).rename(map)
+
+Export (Defaults & Batching)
+- Defaults:
+  - format=parquet
+  - parquet.compression=zstd
+  - csv.delimiter="~"
+  - csv.quote_all=true
+- Parquet (preferred):
+  - If acceptable as single file: ldf.sink_parquet(path, compression="zstd", compression_level=3)
+  - If need chunked output by target size:
+    - Estimate rows_per_chunk from a small sample (e.g., up to 10k) written with the same compression.
+    - Loop i=0..; slice chunk = ldf.slice(i*rows_per_chunk, rows_per_chunk).collect(engine="streaming"); chunk.write_parquet(part_i, compression="zstd")
+    - This avoids collecting the entire dataset at once and keeps memory bounded while providing approximate size control.
+- CSV:
+  - Chunked export by rows (same estimation method). For each chunk DataFrame collected with engine="streaming":
+    - Replace CR/LF within string columns
+    - Write via csv.writer with delimiter "~", quoting=QUOTE_ALL, lineterminator='\n'
+
+Logging & Progress
+- Log phases (load, pre-clean, column-clean, concat, dedup, not-empty, rename, export)
+- Report rows processed per chunk on export.
+
+Errors & Safety
+- If a referenced column missing: warn and skip.
+- If regex invalid: log and skip only the affected column.
+- If rename conflict: auto-suffix.
+
+Outputs
+- Exports stored under workflow.export.output_dir/<stem>.*
+- Parquet chunks numbered *_part_1.parquet, *_part_2.parquet
+- CSV: single file by default, or chunked if configured later.
+
+
+============================================================
+Code Changes Overview (without implementing here)
+============================================================
+- New: core/pipeline.py
+  - build_combined_regex(keys) -> str|None
+  - clean_columns(ldf, columns, regex, to_lowercase, nullify_empty, empty_value) -> ldf
+  - apply_concatenations(ldf, concat_ops) -> ldf
+  - apply_modes(ldf, standalone, exclude) -> ldf
+  - apply_pre_clean(ldf) -> ldf
+  - apply_dedup_not_empty(ldf, unique_cols, not_empty_cols) -> ldf
+  - rename_columns_safe(ldf, display_names) -> ldf
+  - export_parquet_chunked(df_or_ldf, target_dir, base_name, compression, target_mb)
+  - export_csv_chunked(df_or_ldf, target_dir, base_name, delimiter, quote_all)
+
+- Update: utils/data_utils.py
+  - Add method save_lazy_to_parquet using sink_parquet (already present) and expose from UI.
+
+- Update: steps/* (UI)
+  - After analysis, set origin_df = lazy_df.limit(10_000).collect(streaming=True)
+  - All interactive steps operate on df/origin_df only and update columns_data + workflow builder state
+  - Add “Save workflow” button → writes workflow.json
+  - Replace heavy run_full_cleaning with instructions/CLI command
+
+- New: cli_process.py
+  - Parse args, load parquet/analyze_cache/workflow
+  - Build lazy pipeline using core/pipeline.py
+  - Export with defaults and batching
+
+- Docs: README.md
+  - Add sections for new two-block workflow and CLI usage
+
+
+============================================================
+Streamlit Session State & Widgets (Best Practices)
+============================================================
+- Use st.session_state to store durable app state; avoid directly overriding already-instantiated widget values.
+- Prefer callbacks (on_change/on_click) to update session state before rerun for consistent UI updates.
+- When preserving values across steps/pages, use dummy keys pattern or copy between temporary ("_key") and permanent keys.
+- Avoid modifying button-like widget states via session state (ephemeral).
+
+
+============================================================
+Defaults Summary
+============================================================
+- UI preview sample size: 10,000 rows (collect with engine="streaming")
+- Export defaults:
+  - format: parquet
+  - parquet.compression: zstd (compression_level=3)
+  - parquet.target_mb_per_file: 100 (approximate via row estimation + streaming chunk collection)
+  - csv.delimiter: "~"
+  - csv.quote_all: true
+  - export.output_dir: exports/<stem>
+
+
+============================================================
+Milestones
+============================================================
+1) Core module scaffolding (pipeline functions)
+2) CLI script with end-to-end execution and defaults
+3) UI updates: sample-only interactions + workflow save
+4) Docs update and command hints in UI
+5) Test passes on small/medium/large datasets
+
+============================================================
+Error Handling Strategy
+============================================================
+Scope: both UI (Block 1) and CLI (Block 2). Aim for fail-fast on critical issues, graceful skips on per-column operations, and clear user messages.
+
+Categories & Actions
+1) Input Validation Errors
+- Missing files (parquet/analyze_cache/workflow): exit with non-zero code (CLI) or st.error in UI; log at ERROR.
+- Schema mismatch (analyze_cache vs current ldf): WARN and continue if non-critical, or ERROR if referenced columns absent in workflow.
+- Invalid workflow schema (JSON shape/version): ERROR with message; suggest regenerating workflow.
+
+2) I/O & Filesystem
+- Permission denied / disk full: log ERROR with path; UI shows st.error; CLI exits non-zero.
+- Partial writes on export: abort remaining parts; leave a manifest with succeeded parts; log CRITICAL.
+
+3) Memory / Streaming
+- Collect without streaming on large data: enforce collect(engine="streaming") for previews and chunked export; if operation not supported in streaming (per explain), fallback with warning and smaller batch size or convert to eager only for that sub-step with clear logs.
+
+4) Regex & Column Ops
+- Missing columns referenced in workflow: log WARNING and skip that column.
+- Invalid regex (compile error): log ERROR, skip application for that column.
+- Rename conflicts: auto-suffix and log INFO; never crash.
+
+5) Processing Pipeline Failures
+- Any step exception wraps with context (step name, column names) and re-raises to top-level handler in CLI for a clean error message.
+- CLI returns non-zero exit on fatal errors; UI displays st.error with actionable hint.
+
+6) Export
+- Chunk estimation division by zero / tiny sample: use safe fallback (min rows_per_chunk = 10_000).
+- CSV writing encoding errors: replace or escape problematic bytes; log WARNING.
+- Parquet sink failure: retry once; on persistent failure, downgrade compression level and retry; otherwise ERROR and abort.
+
+User Feedback
+- UI: concise st.error/st.warning with suggestions; detailed trace only in logs.
+- CLI: stderr concise summary + pointer to log file.
+
+
+============================================================
+Environment-based Configuration (ENV)
+============================================================
+Mechanism
+- Use os.environ with sane defaults. Provide optional .env support (python-dotenv) if desired later.
+- Centralize in utils/config.py (UI) and reuse in CLI (or create shared core/config.py).
+
+Variables & Defaults
+- LDC_INPUT_DIR (default: ./data)
+- LDC_LOG_DIR (default: ./logs)
+- LDC_PARQUET_DIR (default: ./parquet_cache)
+- LDC_ANALYZE_DIR (default: ./analyze_cache)
+- LDC_EXPORT_DIR (default: ./exports)
+- LDC_UI_PREVIEW_ROWS (default: 10000)
+- LDC_PARQUET_COMPRESSION (default: zstd)
+- LDC_PARQUET_TARGET_MB (default: 100)
+- LDC_CSV_DELIMITER (default: ~)
+- LDC_CSV_QUOTE_ALL (default: true)
+
+Adoption Plan
+- Update utils/config.py to read these env vars once at startup and expose Path objects.
+- CLI to resolve paths from workflow first, then fallback to env, then to defaults.
+- Ensure paths are created with mkdir(parents=True, exist_ok=True) where appropriate.
+
+
+============================================================
+Logging Strategy
+============================================================
+Goals
+- Consistent, structured logs across UI and CLI. Human-readable in console; detailed file logs with timestamps.
+
+UI (Streamlit)
+- Reuse existing utils/logger.init_logger(log_folder, app_name).
+- Levels: INFO default, DEBUG enabled via env (e.g., LDC_LOG_LEVEL=DEBUG).
+- Messages: short in UI, detailed in log file.
+
+CLI
+- Initialize logger with the same formatter schema as UI, separate file per run (timestamped) in LDC_LOG_DIR.
+- Log start parameters: input paths, preview rows, export defaults.
+- Log streaming plans (optional): include lf.explain(streaming=True) output to file at DEBUG level.
+- On export, log each chunk written with row counts and file names.
+
+Structure & Content
+- Include contextual fields: step, file stem, column (when applicable).
+- Example message shapes:
+  - INFO  Loading parquet: path=..., schema_cols=...
+  - WARN  Missing column in workflow: column=..., action=skip
+  - ERROR Export failed: part=3, reason=..., retry=1
+
+Retention & Size Management
+- One file per run, stored under logs/ by date-time.
+- Optional rotation (future): integrate RotatingFileHandler with size caps.
+
+
+============================================================
+Acceptance Checks
+============================================================
+- ENV overrides verified: changing LDC_* variables affects runtime paths and defaults without code changes.
+- Error handling covers: missing files, schema mismatch, invalid regex, export failures, memory issues.
+- Logging present at all critical points; export chunk logs visible; DEBUG shows streaming explain output when enabled.
+- UI never triggers heavy processing; preview uses collect(engine="streaming").
+- CLI completes end-to-end with non-zero exit on fatal errors and clear messages.
