@@ -55,6 +55,18 @@ class DataLoader:
 
             # Получаем схему лениво, без загрузки данных
             schema = lazy_df.collect_schema()
+
+            # 1) Очищаем названия колонок от кавычек и лишних пробелов
+            original_names = list(schema.names())
+            cleaned_names = [name.replace('"', '').strip() for name in original_names]
+            if cleaned_names != original_names:
+                rename_map = {orig: new for orig, new in zip(original_names, cleaned_names) if orig != new}
+                if rename_map:
+                    lazy_df = lazy_df.rename(rename_map)
+                    # Обновляем схему после переименования
+                    schema = lazy_df.collect_schema()
+
+            # 2) Ленивая очистка строковых значений от кавычек
             string_cols = [col for col in schema if schema[col] == pl.Utf8]
 
             # Применяем очистку строк лениво
@@ -85,6 +97,20 @@ class DataLoader:
                             infer_schema_length=1000,
                             rechunk=False
                         )
+                        # Очистим заголовки и строковые значения в fallback-ветке
+                        schema = lazy_df.collect_schema()
+                        original_names = list(schema.names())
+                        cleaned_names = [name.replace('"', '').strip() for name in original_names]
+                        if cleaned_names != original_names:
+                            rename_map = {orig: new for orig, new in zip(original_names, cleaned_names) if orig != new}
+                            if rename_map:
+                                lazy_df = lazy_df.rename(rename_map)
+                                schema = lazy_df.collect_schema()
+                        string_cols = [col for col in schema if schema[col] == pl.Utf8]
+                        if string_cols:
+                            lazy_df = lazy_df.with_columns([
+                                pl.col(c).str.replace_all('"', '').alias(c) for c in string_cols
+                            ])
                         logger.info("Successfully read CSV with utf8-lossy encoding")
                         return lazy_df
                     except Exception as fallback_e:
