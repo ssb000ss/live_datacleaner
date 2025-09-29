@@ -18,12 +18,25 @@ CACHE_ROOT = Path("analyze_cache")
 
 
 def analyze_file():
-    if "source_file" not in st.session_state or st.session_state.source_file is None:
-        st.error("Файл не загружен. Перейдите к шагу 1.")
+    if "lazy_df" not in st.session_state or st.session_state.lazy_df is None:
+        st.error("Данные не загружены. Перейдите к шагу 1.")
         return
 
-    st.markdown("# Анализ загруженного файла")
+    st.markdown("# Анализ загруженных данных")
     show_table()
+
+    # Если данные уже загружены из папки, используем их
+    if "columns_data" in st.session_state and st.session_state.columns_data:
+        st.success("✅ Данные колонок уже загружены из файла!")
+        st.info("Метаданные колонок загружены из columns_data.json")
+        
+        # Показываем информацию о колонках
+        if st.session_state.columns_data:
+            st.markdown("### Информация о колонках:")
+            for col, data in st.session_state.columns_data.items():
+                with st.expander(f"📊 {col}"):
+                    st.json(data)
+        return
 
     st.checkbox("Игнорировать кеш", key="ignore_column_cache", value=False)
 
