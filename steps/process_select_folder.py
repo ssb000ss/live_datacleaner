@@ -11,7 +11,7 @@ logger = logging.getLogger(config.APP_TITLE)
 
 def get_export_folders():
     """Получает список папок в exports"""
-    exports_path = Path("exports")
+    exports_path = config.EXPORTS_FOLDER
     if not exports_path.exists():
         return []
     
