@@ -25,7 +25,13 @@ class StreamingDataProcessor:
                  temp_dir: Optional[Path] = None):
         self.chunk_size = chunk_size
         self.max_memory_percent = max_memory_percent
-        self.temp_dir = temp_dir or Path(tempfile.gettempdir()) / "streaming_processor"
+        
+        # Используем настройку из config, если доступна
+        from utils import config
+        if config.TEMP_FOLDER:
+            self.temp_dir = config.TEMP_FOLDER / "streaming_processor"
+        else:
+            self.temp_dir = temp_dir or Path(tempfile.gettempdir()) / "streaming_processor"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         
     def check_memory_usage(self) -> bool:
