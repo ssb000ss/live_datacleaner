@@ -14,6 +14,8 @@ import polars as pl
 import psutil
 import gc
 from datetime import datetime
+from utils.data_cleaner import lowercase_columns
+from utils.filename_utils import generate_nomad_filename, get_current_year
 
 # Настройка логирования
 logging.basicConfig(
@@ -63,41 +65,57 @@ class StreamingDataProcessor:
             schema = ldf.collect_schema()
             available_columns = set(schema.names())
             
-            # 1. Сначала применяем regex правила к исходным колонкам
+            # 1. Конфигурация regex и конкатенаций
             from utils.config import REGEX_PATTERNS_UNICODE
             regex_rules = workflow.get("regex_rules", {})
-            for col, patterns in regex_rules.items():
-                if patterns and col in available_columns:
-                    # Комбинируем паттерны из REGEX_PATTERNS_UNICODE
-                    pattern_strings = [REGEX_PATTERNS_UNICODE.get(p, p) for p in patterns if p in REGEX_PATTERNS_UNICODE]
-                    combined_pattern = "|".join(pattern_strings)
-                    ldf = ldf.with_columns([
-                        pl.col(col)
-                        .cast(pl.Utf8, strict=False)
-                        .fill_null("")
-                        .str.extract_all(combined_pattern)
-                        .list.eval(pl.element().filter(pl.element().str.len_chars() > 0), parallel=True)
-                        .list.join("")
-                        .fill_null("")
-                        .alias(col)
-                    ])
-                    logger.info(f"Применены regex правила для колонки: {col}")
-                elif patterns:
-                    logger.warning(f"Пропущены regex правила для колонки {col}: колонка не найдена")
-            
-            # 2. Применяем конкатенации (после regex обработки исходных колонок)
             concatenations = workflow.get("concatenations", [])
+
+            # Определяем целевые колонки с regex и источники, которые нужно предочистить regex целевой колонки
+            targets_with_regex: set[str] = set()
+            sources_preclean_by_target_regex: set[str] = set()
+            for concat in concatenations:
+                new_col = concat.get("name")
+                if new_col and regex_rules.get(new_col):
+                    targets_with_regex.add(new_col)
+                    for src in concat.get("source_columns", []):
+                        if src in available_columns:
+                            sources_preclean_by_target_regex.add(src)
+
+            # Предочистка источников regex целевой колонки (например, regex fio -> применяем к first_name/last_name)
+            for concat in concatenations:
+                new_col = concat.get("name")
+                if new_col not in targets_with_regex:
+                    continue
+                patterns = regex_rules.get(new_col) or []
+                pattern_strings = [REGEX_PATTERNS_UNICODE.get(p, p) for p in patterns if p in REGEX_PATTERNS_UNICODE]
+                if not pattern_strings:
+                    continue
+                combined_pattern = "|".join(pattern_strings)
+                for src in concat.get("source_columns", []):
+                    if src in sources_preclean_by_target_regex:
+                        ldf = ldf.with_columns([
+                            pl.col(src)
+                            .cast(pl.Utf8, strict=False)
+                            .fill_null("")
+                            .str.extract_all(combined_pattern)
+                            .list.eval(pl.element().filter(pl.element().str.len_chars() > 0), parallel=True)
+                            .list.join("")
+                            .fill_null("")
+                            .alias(src)
+                        ])
+                        logger.info(f"Предочистка regex (целевой {new_col}) применена к источнику: {src}")
+
+            # 2. Конкатенации без последующего regex на целевой колонке
             for concat in concatenations:
                 source_cols = concat["source_columns"]
                 separator = concat["separator"]
                 new_col = concat["name"]
-                
+
                 # Проверяем, что все исходные колонки существуют
                 valid_source_cols = [col for col in source_cols if col in available_columns]
                 if valid_source_cols and len(valid_source_cols) == len(source_cols):
-                    ldf = ldf.with_columns([
-                        pl.concat_str([pl.col(col) for col in source_cols], separator=separator).alias(new_col)
-                    ])
+                    expr = pl.concat_str([pl.col(col) for col in source_cols], separator=separator)
+                    ldf = ldf.with_columns([expr.alias(new_col)])
                     logger.info(f"Создана конкатенация: {new_col} из {source_cols}")
                 else:
                     missing = set(source_cols) - set(valid_source_cols)
@@ -114,14 +132,22 @@ class StreamingDataProcessor:
                 if len(valid_exclude) != len(exclude_columns):
                     missing = set(exclude_columns) - set(valid_exclude)
                     logger.warning(f"Колонки для исключения не найдены: {missing}")
-            
-            # 4. Применяем regex правила к новым колонкам (например, fio)
+
+            # 4. Применяем regex правила к исходным колонкам, КРОМЕ тех, что участвуют
+            # в конкатенациях с целевым regex (мы их уже обработали через целевую колонку)
             updated_schema = ldf.collect_schema()
             updated_columns = set(updated_schema.names())
-            
+
             for col, patterns in regex_rules.items():
-                if patterns and col in updated_columns and col not in available_columns:
-                    # Это новая колонка (например, fio), применяем regex правила
+                if not patterns:
+                    continue
+                # Цели с regex не трогаем (их regex уже применён к источникам)
+                if col in targets_with_regex:
+                    continue
+                # Источники, к которым уже применяли регексы целевых, пропускаем
+                if col in sources_preclean_by_target_regex:
+                    continue
+                if col in updated_columns:
                     pattern_strings = [REGEX_PATTERNS_UNICODE.get(p, p) for p in patterns if p in REGEX_PATTERNS_UNICODE]
                     combined_pattern = "|".join(pattern_strings)
                     ldf = ldf.with_columns([
@@ -134,7 +160,9 @@ class StreamingDataProcessor:
                         .fill_null("")
                         .alias(col)
                     ])
-                    logger.info(f"Применены regex правила для новой колонки: {col}")
+                    logger.info(f"Применены regex правила для колонки: {col}")
+                else:
+                    logger.warning(f"Пропущены regex правила для колонки {col}: колонка не найдена")
             
             # 5. Применяем переименование колонок
             display_names = workflow.get("display_names", {})
@@ -149,14 +177,95 @@ class StreamingDataProcessor:
                     # Обновляем имена колонок в настройках workflow для последующих операций
                     self._update_workflow_column_names(workflow, valid_renames)
             
-            # 6. Применяем очистку данных
+            # 6. Автоматически переводим все строковые колонки в нижний регистр
+            string_cols = [col for col, dtype in ldf.collect_schema().items() if dtype == pl.Utf8]
+            if string_cols:
+                ldf = lowercase_columns(ldf, string_cols)
+                logger.info(f"Применен автоматический перевод в нижний регистр для всех строковых колонок: {string_cols}")
+            
+            # 7. Применяем очистку данных
             ldf = self._apply_data_cleaning(ldf)
+            
+            # 8. Применяем сборку вложенной структуры additional_info при наличии настроек
+            ldf = self._apply_nesting(ldf, workflow)
+            
+            # 9. Добавляем год и код страны в финальную структуру
+            ldf = self._add_metadata_fields(ldf, workflow)
             
             return ldf
             
         except Exception as e:
             logger.error(f"Ошибка применения операций с колонками: {e}")
             raise
+
+    def _apply_nesting(self, ldf: pl.LazyFrame, workflow: Dict[str, Any]) -> pl.LazyFrame:
+        """Собирает вложенную структуру additional_info и оставляет main_info на верхнем уровне.
+        Ожидает структуру:
+        workflow["structure"] = {"main_info": [...], "additional_info": ["col", {"group": ["a","b"]}, ...]}
+        """
+        try:
+            structure = workflow.get("structure") or {}
+            main_info = structure.get("main_info", [])
+            additional_info = structure.get("additional_info", [])
+
+            if not main_info and not additional_info:
+                return ldf
+
+            schema_names = set(ldf.collect_schema().names())
+
+            # Собираем состав additional_info
+            flat_fields: list[str] = []
+            nested_structs: list[pl.Expr] = []
+
+            group_keys = set()
+            for item in additional_info:
+                if isinstance(item, dict) and item:
+                    group_keys.update(item.keys())
+
+            for item in additional_info:
+                if isinstance(item, str):
+                    if item in schema_names and item not in group_keys:
+                        flat_fields.append(item)
+                elif isinstance(item, dict):
+                    for nested_key, nested_fields in item.items():
+                        valid_nested = [c for c in nested_fields if c in schema_names]
+                        if valid_nested:
+                            nested_structs.append(
+                                pl.struct([pl.col(c) for c in valid_nested]).alias(nested_key)
+                            )
+
+            all_struct_fields: list[pl.Expr] = [pl.col(c) for c in flat_fields] + nested_structs
+            if all_struct_fields:
+                additional_struct = pl.struct(all_struct_fields).alias("additional_info")
+            else:
+                additional_struct = pl.lit(None).alias("additional_info")
+
+            safe_main = [c for c in main_info if c != "additional_info" and c in schema_names]
+
+            return ldf.select([pl.col(c) for c in safe_main] + [additional_struct])
+        except Exception as e:
+            logger.error(f"Ошибка сборки вложенной структуры: {e}")
+            return ldf
+    
+    def _add_metadata_fields(self, ldf: pl.LazyFrame, workflow: Dict[str, Any]) -> pl.LazyFrame:
+        """Добавляет год и код страны в финальную структуру данных"""
+        try:
+            # Получаем год и код страны из workflow
+            year = workflow.get("year", get_current_year())
+            country_code = workflow.get("country_code", "ru")
+            
+            # Добавляем поля как константы
+            ldf = ldf.with_columns([
+                pl.lit(year).alias("year"),
+                pl.lit(country_code).alias("country_code")
+            ])
+            
+            logger.info(f"Добавлены метаданные: year={year}, country_code={country_code}")
+            return ldf
+            
+        except Exception as e:
+            logger.error(f"Ошибка добавления метаданных: {e}")
+            return ldf
     
     def _update_workflow_column_names(self, workflow: Dict[str, Any], renames: Dict[str, str]):
         """Обновляет имена колонок в настройках workflow после переименования"""
@@ -174,6 +283,44 @@ class StreamingDataProcessor:
                 new_columns = [renames.get(col, col) for col in old_columns]
                 workflow["not_empty"]["columns"] = new_columns
                 logger.info(f"Обновлены имена колонок в валидации: {old_columns} -> {new_columns}")
+
+            # Обновляем имена в структуре вывода (structure -> main_info, additional_info)
+            structure = workflow.get("structure") or {}
+            if structure:
+                # main_info: список строк, возможно содержит 'additional_info' как зарезервированное поле
+                main_info = structure.get("main_info", [])
+                if isinstance(main_info, list):
+                    updated_main = []
+                    for name in main_info:
+                        if name == "additional_info":
+                            updated_main.append(name)
+                        else:
+                            updated_main.append(renames.get(name, name))
+                    structure["main_info"] = updated_main
+
+                # additional_info: список строк и/или dict {group: [fields]}
+                additional_info = structure.get("additional_info", [])
+                if isinstance(additional_info, list):
+                    new_additional: list = []
+                    for item in additional_info:
+                        if isinstance(item, str):
+                            new_additional.append(renames.get(item, item))
+                        elif isinstance(item, dict):
+                            new_item = {}
+                            for grp, fields in item.items():
+                                if isinstance(fields, list):
+                                    new_fields = [renames.get(f, f) for f in fields]
+                                    new_item[grp] = new_fields
+                                else:
+                                    new_item[grp] = fields
+                            new_additional.append(new_item)
+                        else:
+                            new_additional.append(item)
+                    structure["additional_info"] = new_additional
+
+                workflow["structure"] = structure
+                logger.info("Обновлены имена колонок в structure (main_info/additional_info)")
+            
                 
         except Exception as e:
             logger.error(f"Ошибка обновления имен колонок в workflow: {e}")
@@ -280,31 +427,39 @@ class StreamingDataProcessor:
             else:
                 ldf = pl.scan_csv(str(input_path), encoding='utf8', ignore_errors=True)
             
-            # Получаем общее количество строк
-            self.total_rows = ldf.select(pl.len()).collect().item()
-            logger.info(f"Всего строк для обработки: {self.total_rows:,}")
+            # Пропускаем предварительный подсчет строк, чтобы избежать лишнего прохода по данным
             
             # Применяем операции из workflow
             ldf = self.apply_column_operations(ldf, workflow)
-            ldf = self.apply_deduplication(ldf, workflow)
             ldf = self.apply_validation(ldf, workflow)
+            ldf = self.apply_deduplication(ldf, workflow)
             
-            # Выполняем в потоковом режиме
-            logger.info("Запуск потоковой обработки...")
+            # Выполняем в потоковом режиме, напрямую записывая результат без материализации в память
+            logger.info("Запуск потоковой обработки и запись в Parquet...")
             start_time = datetime.now()
-            
-            # Используем streaming engine для обработки больших файлов
-            result_df = ldf.collect(engine="streaming")
-            
+
+            # Убедимся, что расширение .parquet
+            if output_path.suffix.lower() != '.parquet':
+                output_path = output_path.with_suffix('.parquet')
+
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Потоковая запись результата
+            ldf.sink_parquet(
+                str(output_path),
+                compression="zstd",
+                compression_level=3,
+                maintain_order=False
+            )
+
+            # Пропускаем финальный подсчет строк, чтобы не выполнять второй проход по данным
+
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
-            
+
             logger.info(f"Обработка завершена за {processing_time:.2f} секунд")
-            logger.info(f"Обработано строк: {len(result_df):,}")
-            
-            # Сохраняем результат
-            self._save_result(result_df, output_path, workflow)
-            
+            logger.info(f"Результат сохранен: {output_path}")
+
             return True
             
         except Exception as e:
@@ -312,50 +467,20 @@ class StreamingDataProcessor:
             return False
     
     def _save_result(self, df: pl.DataFrame, output_path: Path, workflow: Dict[str, Any]):
-        """Сохраняет результат обработки"""
+        """Сохраняет результат обработки только в Parquet с дефолтным сжатием."""
         try:
-            export_settings = workflow.get("export", {})
-            format_type = export_settings.get("format", "parquet")
-            
-            # Определяем формат по расширению файла, если не указан в workflow
-            if output_path.suffix.lower() == '.csv':
-                format_type = "csv"
-            elif output_path.suffix.lower() == '.parquet':
-                format_type = "parquet"
-            
-            if format_type == "parquet":
-                parquet_settings = export_settings.get("parquet", {})
-                compression = parquet_settings.get("compression", "zstd")
-                target_mb = parquet_settings.get("target_mb_per_file", 100)
-                
-                # Убеждаемся, что расширение правильное
-                if not output_path.suffix.lower() == '.parquet':
-                    output_path = output_path.with_suffix('.parquet')
-                
-                # Сохраняем с оптимизацией
-                df.write_parquet(
-                    str(output_path),
-                    compression=compression,
-                    compression_level=3
-                )
-                
-            elif format_type == "csv":
-                csv_settings = export_settings.get("csv", {})
-                delimiter = csv_settings.get("delimiter", "~")
-                quote_all = csv_settings.get("quote_all", True)
-                
-                # Убеждаемся, что расширение правильное
-                if not output_path.suffix.lower() == '.csv':
-                    output_path = output_path.with_suffix('.csv')
-                
-                # Polars write_csv параметры
-                df.write_csv(
-                    str(output_path),
-                    separator=delimiter
-                )
-            
+            # Всегда сохраняем как Parquet независимо от настроек workflow
+            if output_path.suffix.lower() != '.parquet':
+                output_path = output_path.with_suffix('.parquet')
+
+            df.write_parquet(
+                str(output_path),
+                compression="zstd",
+                compression_level=3
+            )
+
             logger.info(f"Результат сохранен: {output_path}")
-            
+
         except Exception as e:
             logger.error(f"Ошибка сохранения результата: {e}")
             raise
@@ -366,8 +491,7 @@ def main():
     parser.add_argument('--path', required=True, help='Путь к входному файлу (parquet или csv)')
     parser.add_argument('--workflow', required=True, help='Путь к файлу workflow.json')
     parser.add_argument('--analyze_cache', help='Путь к файлу columns_data.json (опционально)')
-    parser.add_argument('--output', help='Путь для сохранения результата (по умолчанию: input_processed.parquet)')
-    parser.add_argument('--format', type=str, choices=['parquet', 'csv'], help='Формат выходного файла (переопределяет настройки workflow)')
+    parser.add_argument('--output', help='Путь для сохранения результата (по умолчанию: из workflow)')
     parser.add_argument('--chunk-size', type=int, default=50000, help='Размер чанка для обработки (по умолчанию: 50000)')
     parser.add_argument('--max-memory', type=float, default=80.0, help='Максимальное использование памяти в процентах (по умолчанию: 80)')
     
@@ -385,27 +509,42 @@ def main():
         logger.error(f"Файл workflow не найден: {workflow_path}")
         sys.exit(1)
     
-    # Определяем выходной путь
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = input_path.parent / f"{input_path.stem}_processed.parquet"
-    
     # Создаем процессор
     processor = StreamingDataProcessor(
         chunk_size=args.chunk_size,
         max_memory_percent=args.max_memory
     )
     
+    # Загружаем workflow для получения настроек
+    workflow = processor.load_workflow(workflow_path)
+    
+    # Определяем выходной путь (всегда .parquet)
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        # Используем имя файла из workflow, если есть
+        if "output_filename" in workflow:
+            output_path = input_path.parent / workflow["output_filename"]
+            logger.info(f"Используется имя файла из workflow: {workflow['output_filename']}")
+        else:
+            # Fallback к простому имени
+            output_path = input_path.parent / f"{input_path.stem}_processed.parquet"
+            logger.info(f"Используется fallback имя файла: {output_path.name}")
+    
+    if output_path.suffix.lower() != '.parquet':
+        output_path = output_path.with_suffix('.parquet')
+    
     try:
-        # Загружаем workflow
-        workflow = processor.load_workflow(workflow_path)
+        # Добавляем год и код страны в workflow (если не заданы в workflow)
+        if "year" not in workflow:
+            workflow["year"] = args.year or get_current_year()
+        if "country_code" not in workflow:
+            workflow["country_code"] = args.country_code
         
-        # Переопределяем формат экспорта если указан
-        if args.format:
-            if "export" not in workflow:
-                workflow["export"] = {}
-            workflow["export"]["format"] = args.format
+        # Формат экспорта всегда parquet, игнорируем иные настройки
+        if "export" not in workflow:
+            workflow["export"] = {}
+        workflow["export"]["format"] = "parquet"
         
         # Обрабатываем данные
         success = processor.process_streaming(input_path, workflow, output_path)

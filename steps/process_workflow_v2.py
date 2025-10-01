@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 from utils.data_utils import DataLoader
+from utils.filename_utils import generate_nomad_filename, get_current_year
 from utils import config
 
 
@@ -60,6 +61,40 @@ def step_save_workflow():
         return
 
     st.subheader("💾 Сохранение Workflow")
+    
+    # Настройки экспорта
+    st.markdown("### Настройки экспорта")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        country_code = st.selectbox(
+            "Код страны:",
+            options=sorted(config.ALLOWED_COUNTRY_CODES),
+            index=0,
+            help="Код страны для генерации имени файла в формате nomad"
+        )
+    with col2:
+        year = st.number_input(
+            "Год:",
+            value=get_current_year(),
+            min_value=2000,
+            max_value=2100,
+            help="Год для генерации имени файла"
+        )
+    
+    # Генерируем имя файла для экспорта
+    try:
+        source_path = st.session_state.source_file
+        generated_filename = generate_nomad_filename(
+            country_code=country_code,
+            original_filename=source_path.name,
+            year=year
+        )
+        st.success(f"📄 Сгенерированное имя файла: `{generated_filename}`")
+    except ValueError as e:
+        st.error(f"Ошибка генерации имени файла: {e}")
+        return
+    
     st.info("💡 Нажмите кнопку ниже для сохранения всех настроек в workflow файл.")
 
     # Простая кнопка сохранения
@@ -84,12 +119,17 @@ def step_save_workflow():
                 if data.get("mode") == "exclude"
             ]
             
-            # Собираем display names
-            display_names = {
-                col: data.get("display_name", col)
-                for col, data in columns_data.items()
-                if data.get("mode") == "standalone"
-            }
+            # Собираем display names (из анализа колонок + переименования)
+            display_names = {}
+            
+            # Сначала добавляем display names из анализа колонок
+            for col, data in columns_data.items():
+                if data.get("mode") == "standalone":
+                    display_names[col] = data.get("display_name", col)
+            
+            # Затем добавляем/обновляем переименования из GUI
+            if hasattr(st.session_state, 'column_renames') and st.session_state.column_renames:
+                display_names.update(st.session_state.column_renames)
             
             # Собираем конкатенации
             concatenations = []
@@ -107,6 +147,8 @@ def step_save_workflow():
             for col, data in columns_data.items():
                 if data.get("selected_patterns"):
                     regex_rules[col] = data["selected_patterns"]
+            
+            # Используем настройки экспорта, которые уже выбраны выше
             
             # Настройки экспорта по умолчанию
             export_settings = {
@@ -126,10 +168,18 @@ def step_save_workflow():
             workflow = {
                 "version": "1.0",
                 "created_at": datetime.now().isoformat(),
+                "year": year,
+                "country_code": country_code,
+                "output_filename": generated_filename,
                 "source": {
                     "parquet_path": str(parquet_path),
                     "file_hash": file_hash,
                     "schema": list(st.session_state.lazy_df.collect_schema().names())
+                },
+                # Новая секция структуры для вложенности
+                "structure": {
+                    "main_info": st.session_state.get("load_data", {}).get("main_info", []),
+                    "additional_info": st.session_state.get("load_data", {}).get("additional_info", [])
                 },
                 "columns": {
                     "standalone": standalone_columns,

@@ -13,6 +13,8 @@ from steps import (
 )
 from steps.process_dedup_v2 import step_dedup_validation
 from steps.process_workflow_v2 import step_save_workflow
+from steps.process_select_main_fields import step_select_main_fields
+from steps.process_group_additional_fields import step_group_additional_fields
 from utils import config
 
 if "logger" not in st.session_state:
@@ -29,6 +31,8 @@ STEPS_V2 = [
     "Обработка колонок",
     "Обработка содержимого",
     "Удаление дубликатов и валидация",
+    "Выбор основных полей",
+    "Группировка дополнительных полей",
     "Сохранение workflow"
 ]
 
@@ -41,7 +45,9 @@ step_functions = {
     4: process_column_names.step_process_column_names,
     5: process_regex_content.step_regex_content,
     6: step_dedup_validation,
-    7: step_save_workflow,
+    7: step_select_main_fields,
+    8: step_group_additional_fields,
+    9: step_save_workflow,
 }
 
 
@@ -54,6 +60,11 @@ def initialize_session_state():
         st.session_state.loader = DataLoader(config.PARQUET_FOLDER)
         st.session_state.initialized = True
         st.session_state.files = {}
+        # Инициализация для новых шагов
+        st.session_state.load_data = {
+            "main_info": [],
+            "additional_info": [],
+        }
         logger.info("Инициализация завершена.")
 
 

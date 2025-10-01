@@ -125,3 +125,21 @@ ANALYZE_ROWS = 1_000
 PARQUET_FOLDER = BASE_FOLDER / "parquet_cache"
 
 COMPATIBLE_EXTENSIONS = ['.csv', '.txt']
+
+# Country codes and validation
+ALLOWED_COUNTRY_CODES = {"ru", "kz", "uz", "tm", "cn"}
+
+# Transliteration mapping for Cyrillic to Latin
+CYRILLIC_TO_LATIN_MAPPING = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "",
+    "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    # Uppercase
+    "А": "a", "Б": "b", "В": "v", "Г": "g", "Д": "d", "Е": "e", "Ё": "e",
+    "Ж": "zh", "З": "z", "И": "i", "Й": "y", "К": "k", "Л": "l", "М": "m",
+    "Н": "n", "О": "o", "П": "p", "Р": "r", "С": "s", "Т": "t", "У": "u",
+    "Ф": "f", "Х": "kh", "Ц": "ts", "Ч": "ch", "Ш": "sh", "Щ": "shch", "Ъ": "",
+    "Ы": "y", "Ь": "", "Э": "e", "Ю": "yu", "Я": "ya",
+}

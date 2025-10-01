@@ -128,10 +128,12 @@ def drop_null_rows(ldf: pl.LazyFrame, required_columns: list[str]) -> pl.LazyFra
 def drop_duplicates(ldf: pl.LazyFrame, unique_columns: list[str]) -> pl.LazyFrame:
     """
     Удаляет дубликаты по указанным колонкам.
-    Если список колонок пуст, возвращает входной LazyFrame без изменений.
+    Если список колонок пуст, использует все колонки по умолчанию.
     """
     if not unique_columns:
-        return ldf
+        # Если колонки не указаны, используем все колонки
+        schema_cols = list(ldf.collect_schema().names())
+        return ldf.unique(subset=schema_cols)
     return ldf.unique(subset=unique_columns)
 
 

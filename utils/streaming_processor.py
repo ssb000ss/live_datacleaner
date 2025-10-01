@@ -142,50 +142,94 @@ class StreamingDataProcessor:
                                         workflow: Dict[str, Any]) -> pl.LazyFrame:
         """Применяет операции с колонками в потоковом режиме"""
         try:
+            from utils.config import REGEX_PATTERNS_UNICODE
+
             # Получаем схему для проверки существования колонок
             schema = ldf.collect_schema()
             available_columns = set(schema.names())
-            
-            # Исключаем ненужные колонки
+
+            # Конфигурации
+            concatenations = workflow.get("concatenations", [])
+            regex_rules = workflow.get("regex_rules", {})
+
+            # Определяем целевые колонки с regex и источники, которые нужно предочистить regex целевой колонки
+            targets_with_regex: set[str] = set()
+            sources_preclean_by_target_regex: set[str] = set()
+            for concat in concatenations:
+                new_col = concat.get("name")
+                if new_col and regex_rules.get(new_col):
+                    targets_with_regex.add(new_col)
+                    for src in concat.get("source_columns", []):
+                        if src in available_columns:
+                            sources_preclean_by_target_regex.add(src)
+
+            # Предочистка источников regex целевой колонки
+            for concat in concatenations:
+                new_col = concat.get("name")
+                if new_col not in targets_with_regex:
+                    continue
+                patterns = regex_rules.get(new_col) or []
+                pattern_strings = [REGEX_PATTERNS_UNICODE.get(p, p) for p in patterns if p in REGEX_PATTERNS_UNICODE]
+                if not pattern_strings:
+                    continue
+                combined_pattern = "|".join(pattern_strings)
+                for src in concat.get("source_columns", []):
+                    if src in sources_preclean_by_target_regex:
+                        ldf = ldf.with_columns([
+                            pl.col(src)
+                            .cast(pl.Utf8, strict=False)
+                            .fill_null("")
+                            .str.extract_all(combined_pattern)
+                            .list.eval(pl.element().filter(pl.element().str.len_chars() > 0), parallel=True)
+                            .list.join("")
+                            .fill_null("")
+                            .alias(src)
+                        ])
+                        logger.info(f"Предочистка regex (целевой {new_col}) применена к источнику: {src}")
+
+            # 1) Конкатенации без regex на целевой колонке
+            for concat in concatenations:
+                source_cols = concat["source_columns"]
+                separator = concat["separator"]
+                new_col = concat["name"]
+
+                valid_source_cols = [col for col in source_cols if col in available_columns]
+                if valid_source_cols and len(valid_source_cols) == len(source_cols):
+                    expr = pl.concat_str([pl.col(col) for col in source_cols], separator=separator)
+                    ldf = ldf.with_columns([expr.alias(new_col)])
+                    logger.info(f"Создана конкатенация: {new_col} из {source_cols}")
+                else:
+                    missing = set(source_cols) - set(valid_source_cols)
+                    logger.warning(f"Пропущена конкатенация {new_col}: отсутствуют колонки {missing}")
+
+            # 2) Исключаем ненужные колонки ПОСЛЕ конкатенаций
             exclude_columns = workflow.get("columns", {}).get("exclude", [])
             if exclude_columns:
                 # Фильтруем только существующие колонки
-                valid_exclude = [col for col in exclude_columns if col in available_columns]
+                updated_schema = ldf.collect_schema()
+                updated_columns_local = set(updated_schema.names())
+                valid_exclude = [col for col in exclude_columns if col in updated_columns_local]
                 if valid_exclude:
                     ldf = ldf.drop(valid_exclude)
                     logger.info(f"Исключены колонки: {valid_exclude}")
                 if len(valid_exclude) != len(exclude_columns):
                     missing = set(exclude_columns) - set(valid_exclude)
                     logger.warning(f"Колонки для исключения не найдены: {missing}")
-            
-            # Применяем конкатенации (до исключения колонок)
-            concatenations = workflow.get("concatenations", [])
-            for concat in concatenations:
-                source_cols = concat["source_columns"]
-                separator = concat["separator"]
-                new_col = concat["name"]
-                
-                # Проверяем, что все исходные колонки существуют
-                valid_source_cols = [col for col in source_cols if col in available_columns]
-                if valid_source_cols and len(valid_source_cols) == len(source_cols):
-                    ldf = ldf.with_columns([
-                        pl.concat_str([pl.col(col) for col in source_cols], separator=separator).alias(new_col)
-                    ])
-                    logger.info(f"Создана конкатенация: {new_col} из {source_cols}")
-                else:
-                    missing = set(source_cols) - set(valid_source_cols)
-                    logger.warning(f"Пропущена конкатенация {new_col}: отсутствуют колонки {missing}")
-            
-            # Получаем обновленную схему после исключения колонок и конкатенаций
+
+            # 3) Regex для остальных колонок (не целей и не их предочищенных источников)
             updated_schema = ldf.collect_schema()
             updated_columns = set(updated_schema.names())
-            
-            # Применяем regex правила только к существующим колонкам
-            regex_rules = workflow.get("regex_rules", {})
+
             for col, patterns in regex_rules.items():
-                if patterns and col in updated_columns:
-                    # Комбинируем паттерны
-                    combined_pattern = "|".join(patterns)
+                if not patterns:
+                    continue
+                if col in targets_with_regex:
+                    continue  # regex целей применяли к источникам
+                if col in sources_preclean_by_target_regex:
+                    continue  # источники уже предочищены
+                if col in updated_columns:
+                    pattern_strings = [REGEX_PATTERNS_UNICODE.get(p, p) for p in patterns if p in REGEX_PATTERNS_UNICODE]
+                    combined_pattern = "|".join(pattern_strings)
                     ldf = ldf.with_columns([
                         pl.col(col)
                         .cast(pl.Utf8, strict=False)
@@ -197,9 +241,9 @@ class StreamingDataProcessor:
                         .alias(col)
                     ])
                     logger.info(f"Применены regex правила для колонки: {col}")
-                elif patterns:
+                else:
                     logger.warning(f"Пропущены regex правила для колонки {col}: колонка не найдена")
-            
+
             # Применяем переименование колонок
             display_names = workflow.get("display_names", {})
             if display_names:
