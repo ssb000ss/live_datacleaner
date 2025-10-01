@@ -12,7 +12,7 @@ from steps import (
     process_column_names, process_regex_content
 )
 from steps.process_dedup_v2 import step_dedup_validation
-from steps.process_workflow_v2 import step_save_workflow
+from steps.process_workflow import step_save_workflow
 from steps.process_select_main_fields import step_select_main_fields
 from steps.process_group_additional_fields import step_group_additional_fields
 from utils import config
