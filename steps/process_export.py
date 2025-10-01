@@ -76,7 +76,7 @@ def step_export_file():
         return
 
     export_format = st.selectbox("Выберите формат экспорта:", ["parquet", "csv"])
-    base_export_dir = st.text_input("Базовая директория для экспорта:", value="exports")
+    base_export_dir = st.text_input("Базовая директория для экспорта:", value=str(config.EXPORTS_FOLDER))
 
     if export_format == "parquet":
         max_file_size_mb = st.number_input(
