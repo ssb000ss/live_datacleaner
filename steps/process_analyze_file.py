@@ -14,7 +14,7 @@ from utils import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(config.APP_TITLE)
 
-CACHE_ROOT = Path("analyze_cache")
+# CACHE_ROOT теперь берется из config
 
 
 def analyze_file():
@@ -147,7 +147,7 @@ def get_file_hash(path: Path) -> str:
 def get_cache_path(source_path: Path) -> Path:
     """Путь до файла кеша: cache/<имя_файла>/columns_data.json"""
     safe_name = source_path.stem.replace(" ", "_")
-    cache_dir = CACHE_ROOT / safe_name
+    cache_dir = config.ANALYZE_CACHE_FOLDER / safe_name
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "columns_data.json"
 
