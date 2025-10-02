@@ -49,14 +49,34 @@ def step_export_file():
         st.error("Нет загруженного файла. Сначала выполните шаг 1.")
         return
 
-    if "source_file" not in st.session_state or st.session_state.source_file is None:
-        st.error("Неизвестно имя исходного файла.")
+    st.subheader("📤 Экспорт данных")
+    
+    # Если данные загружены из папки, показываем информацию
+    if "source_folder" in st.session_state:
+        st.info(f"📁 Данные загружены из папки: {st.session_state.source_folder.name}")
+        st.info("💡 Для повторной обработки используйте CLI команду с файлами из этой папки")
+        
+        # Показываем CLI команду
+        parquet_file = st.session_state.parquet_file
+        workflow_file = st.session_state.workflow_file
+        columns_file = st.session_state.columns_file
+        
+        st.markdown("### 🚀 CLI команда для обработки:")
+        cli_command = f"""python cli_process.py \\
+    --path "{parquet_file}" \\
+    --workflow "{workflow_file}" \\
+    --analyze_cache "{columns_file}" \\
+    --output "result.parquet" """
+        
+        st.code(cli_command, language="bash")
+        
+        if st.button("📋 Скопировать команду"):
+            st.code(cli_command)
+        
         return
 
-    st.subheader("📤 Экспорт данных")
-
     export_format = st.selectbox("Выберите формат экспорта:", ["parquet", "csv"])
-    base_export_dir = st.text_input("Базовая директория для экспорта:", value="exports")
+    base_export_dir = st.text_input("Базовая директория для экспорта:", value=str(config.EXPORTS_FOLDER))
 
     if export_format == "parquet":
         max_file_size_mb = st.number_input(

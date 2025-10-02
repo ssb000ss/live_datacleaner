@@ -183,3 +183,4 @@ cython_debug/
 /logs
 /parquet_cache
 /analyze_cache
+/workflows

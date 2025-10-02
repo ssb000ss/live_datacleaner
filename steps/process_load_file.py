@@ -68,6 +68,27 @@ def step_load_file():
                             st.session_state.lazy_df = lazy_df
                             st.session_state.origin_df = lazy_df.limit(5000).collect()
                             st.session_state.df = st.session_state.origin_df.clone()
+                            
+                            # Инициализация полей для новых шагов
+                            if "load_data" not in st.session_state:
+                                st.session_state.load_data = {
+                                    "main_info": [],
+                                    "additional_info": [],
+                                }
+                            
+                            # Автоматический выбор основных полей
+                            DEFAULT_MAIN_COLUMN_NAMES = [
+                                "full_name", "fio", "nickname", "number_phone", "email", 
+                                "car_number", "address", "password", "birthday"
+                            ]
+                            
+                            columns = st.session_state.df.columns
+                            for column in columns:
+                                if column in DEFAULT_MAIN_COLUMN_NAMES:
+                                    st.session_state.load_data["main_info"].append(column)
+                                else:
+                                    st.session_state.load_data["additional_info"].append(column)
+                            
                             show_table()
                             st.success(f"Файл [{file_path.name}] успешно переформатирован и загружен!")
                             st.session_state.format_locked = True

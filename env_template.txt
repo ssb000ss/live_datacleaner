@@ -1,0 +1,31 @@
+# LiveDataCleaner - Настройки путей к папкам
+# Скопируйте этот файл в .env и настройте пути под ваши нужды
+# Все пути могут быть абсолютными или относительными к корню проекта
+
+# Основные папки
+BASE_FOLDER=.
+INPUT_FOLDER=data
+LOG_FOLDER=logs
+PARQUET_FOLDER=parquet_cache
+
+# Дополнительные папки
+WORKFLOWS_FOLDER=workflows
+EXPORTS_FOLDER=exports
+ANALYZE_CACHE_FOLDER=analyze_cache
+STATIC_FOLDER=static
+
+# Временные папки (опционально, по умолчанию используется системная temp)
+# TEMP_FOLDER=/tmp/live_datacleaner
+
+# Настройки приложения
+APP_TITLE=LiveDataCleaner
+PAGE_ICON=📊
+CSS_PATH=static/style.css
+ANALYZE_ROWS=1000
+
+# Поддерживаемые расширения файлов
+COMPATIBLE_EXTENSIONS=.csv,.txt
+
+# Коды стран для валидации
+ALLOWED_COUNTRY_CODES=ru,kz,uz,tm,cn
+

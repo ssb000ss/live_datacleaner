@@ -14,16 +14,29 @@ from utils import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(config.APP_TITLE)
 
-CACHE_ROOT = Path("analyze_cache")
+# CACHE_ROOT теперь берется из config
 
 
 def analyze_file():
-    if "source_file" not in st.session_state or st.session_state.source_file is None:
-        st.error("Файл не загружен. Перейдите к шагу 1.")
+    if "lazy_df" not in st.session_state or st.session_state.lazy_df is None:
+        st.error("Данные не загружены. Перейдите к шагу 1.")
         return
 
-    st.markdown("# Анализ загруженного файла")
+    st.markdown("# Анализ загруженных данных")
     show_table()
+
+    # Если данные уже загружены из папки, используем их
+    if "columns_data" in st.session_state and st.session_state.columns_data:
+        st.success("✅ Данные колонок уже загружены из файла!")
+        st.info("Метаданные колонок загружены из columns_data.json")
+        
+        # Показываем информацию о колонках
+        if st.session_state.columns_data:
+            st.markdown("### Информация о колонках:")
+            for col, data in st.session_state.columns_data.items():
+                with st.expander(f"📊 {col}"):
+                    st.json(data)
+        return
 
     st.checkbox("Игнорировать кеш", key="ignore_column_cache", value=False)
 
@@ -134,7 +147,7 @@ def get_file_hash(path: Path) -> str:
 def get_cache_path(source_path: Path) -> Path:
     """Путь до файла кеша: cache/<имя_файла>/columns_data.json"""
     safe_name = source_path.stem.replace(" ", "_")
-    cache_dir = CACHE_ROOT / safe_name
+    cache_dir = config.ANALYZE_CACHE_FOLDER / safe_name
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "columns_data.json"
 
