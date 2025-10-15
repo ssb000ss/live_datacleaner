@@ -70,7 +70,8 @@ def file_contains_quotes(path: Path, encoding="utf-8", max_lines: int = 20) -> b
 
 
 def clean_special_chars(ldf: pl.LazyFrame) -> pl.LazyFrame:
-    for col in ldf.collect_schema().names():
+    cols = ldf.collect_schema().names()
+    for col in cols:
         ldf = ldf.with_columns([
             pl.col(col).cast(pl.Utf8).alias(col)
         ])
@@ -86,7 +87,7 @@ def clean_special_chars(ldf: pl.LazyFrame) -> pl.LazyFrame:
     for pattern, repl in rules:
         ldf = ldf.with_columns([
             pl.col(col).str.replace_all(pattern, repl).alias(col)
-            for col in ldf.collect_schema().names()
+            for col in cols
         ])
 
     return ldf
@@ -121,16 +122,39 @@ def replace_empty_with(ldf: pl.LazyFrame, value: str | None = None) -> pl.LazyFr
 def drop_null_rows(ldf: pl.LazyFrame, required_columns: list[str]) -> pl.LazyFrame:
     if not required_columns:
         return ldf
-    return ldf.drop_nulls(subset=required_columns)
+    
+    # Определяем пустые значения
+    empty_values = ["", " ", "nan", "NaN", "none", "None", "null", "NULL", "0"]
+    
+    # Создаем условие для фильтрации строк
+    # Строка должна быть удалена, если хотя бы одна из required_columns пуста или null
+    conditions = []
+    for col in required_columns:
+        condition = (
+            pl.col(col).is_null() | 
+            pl.col(col).cast(pl.Utf8).str.strip_chars().is_in(empty_values) |
+            pl.col(col).cast(pl.Utf8).str.strip_chars().eq("")
+        )
+        conditions.append(condition)
+    
+    # Объединяем условия через OR - если любое поле пустое, строка удаляется
+    combined_condition = conditions[0]
+    for condition in conditions[1:]:
+        combined_condition = combined_condition | condition
+    
+    # Фильтруем строки - оставляем только те, где НЕ выполняется условие пустоты
+    return ldf.filter(~combined_condition)
 
 
 def drop_duplicates(ldf: pl.LazyFrame, unique_columns: list[str]) -> pl.LazyFrame:
     """
     Удаляет дубликаты по указанным колонкам.
-    Если список колонок пуст, возвращает входной LazyFrame без изменений.
+    Если список колонок пуст, использует все колонки по умолчанию.
     """
     if not unique_columns:
-        return ldf
+        # Если колонки не указаны, используем все колонки
+        schema_cols = list(ldf.collect_schema().names())
+        return ldf.unique(subset=schema_cols)
     return ldf.unique(subset=unique_columns)
 
 

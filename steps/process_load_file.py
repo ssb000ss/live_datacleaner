@@ -18,9 +18,17 @@ def reset_settings():
 def step_load_file():
     st.markdown("# Загрузка файла и обработка")
     source_file = file_selector(config.INPUT_FOLDER)
+    # Опция игнорировать Parquet-кеш
+    st.checkbox("Игнорировать кеш Parquet (пересоздать .parquet)", key="ignore_parquet_cache", value=False)
+
+    # Сбрасываем блокировку кнопки при выборе нового файла
+    if source_file and st.session_state.get("last_source_file") != source_file:
+        st.session_state.format_locked = False
+
+    button_disabled = bool(st.session_state.get("format_locked"))
 
     if source_file and st.session_state.get("last_source_file") != source_file:
-        if st.button("Переформатировать в Parquet"):
+        if st.button("Переформатировать в Parquet", disabled=button_disabled):
             logger.info(f"Selected file: {source_file}")
             logger.info("Detecting encoding and delimiter...")
 
@@ -36,16 +44,54 @@ def step_load_file():
                     try:
                         if encoding and delimiter:
                             logger.info("Loading data into LazyFrame")
+                            # Если включено игнорирование кеша — удаляем существующий parquet перед загрузкой
+                            try:
+                                if st.session_state.get("ignore_parquet_cache"):
+                                    parquet_path = st.session_state.loader.get_parquet_path(st.session_state.source_file)
+                                    if parquet_path.exists():
+                                        parquet_path.unlink(missing_ok=True)
+                                        logger.info(f"Parquet cache removed: {parquet_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to clear parquet cache: {e}")
+
                             lazy_df = st.session_state.loader.load_data(
                                 st.session_state.source_file,
                                 st.session_state.encoding,
                                 st.session_state.delimiter
                             )
+                            
+                            if lazy_df is None:
+                                st.error("Не удалось загрузить файл. Возможно, недостаточно памяти или файл поврежден.")
+                                logger.error("Failed to load data - lazy_df is None")
+                                return
+                            
                             st.session_state.lazy_df = lazy_df
-                            st.session_state.origin_df = lazy_df.collect().head(1000)
+                            st.session_state.origin_df = lazy_df.limit(5000).collect()
                             st.session_state.df = st.session_state.origin_df.clone()
+                            
+                            # Инициализация полей для новых шагов
+                            if "load_data" not in st.session_state:
+                                st.session_state.load_data = {
+                                    "main_info": [],
+                                    "additional_info": [],
+                                }
+                            
+                            # Автоматический выбор основных полей
+                            DEFAULT_MAIN_COLUMN_NAMES = [
+                                "full_name", "fio", "nickname", "number_phone", "email", 
+                                "car_number", "address", "password", "birthday"
+                            ]
+                            
+                            columns = st.session_state.df.columns
+                            for column in columns:
+                                if column in DEFAULT_MAIN_COLUMN_NAMES:
+                                    st.session_state.load_data["main_info"].append(column)
+                                else:
+                                    st.session_state.load_data["additional_info"].append(column)
+                            
                             show_table()
                             st.success(f"Файл [{file_path.name}] успешно переформатирован и загружен!")
+                            st.session_state.format_locked = True
                     except Exception as e:
                         logger.exception("Error during file processing")
                         st.error(e)

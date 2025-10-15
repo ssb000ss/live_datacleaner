@@ -29,6 +29,10 @@ def step_format_column_values():
     lazy_df = st.session_state.lazy_df
     columns_data = st.session_state.columns_data
 
+    if lazy_df is None:
+        st.error("Данные не загружены")
+        return
+
     # Выбор колонки для форматирования
     target_column = st.selectbox(
         "Выберите колонку для форматирования:",
@@ -43,16 +47,23 @@ def step_format_column_values():
     selected_patterns = columns_data.get(target_column, {}).get("selected_patterns", [])
 
     # Интерфейс для ввода regex и замены
-    st.markdown("### 🔁 Заменить символ по regex")
-    col1, col2 = st.columns(2)
+    st.markdown("### 🔁 Заменить один regex на другой или литерал")
+    col1, col2, col3 = st.columns(3)
     with col1:
         pattern_to_replace = st.selectbox(
-            "Искомый символ или regex-шаблон",
+            "Что заменить (regex)",
             options=selected_patterns,
             format_func=get_pattern_name
         )
     with col2:
-        replacement = st.text_input("Заменить на", value="")
+        replacement_pattern = st.selectbox(
+            "Чем заменить (regex)",
+            options=[""] + selected_patterns,
+            index=0,
+            format_func=lambda x: "—" if x == "" else get_pattern_name(x)
+        )
+    with col3:
+        replacement_literal = st.text_input("Или заменить на литерал", value="")
 
     if st.button("Заменить"):
         try:
@@ -63,51 +74,66 @@ def step_format_column_values():
                 return
 
             regex_pattern_to_replace = config.REGEX_PATTERNS_UNICODE.get(pattern_to_replace, '')
-            # Обновление LazyFrame
+            if not regex_pattern_to_replace:
+                st.error("Не найден шаблон для замены в конфигурации.")
+                return
+
+            # Определяем строку-замену: либо литерал, либо репрезентант второго regex (если однозначный)
+            if replacement_literal:
+                replacement_value = replacement_literal
+            elif replacement_pattern:
+                # Пытаемся взять видимый символ из карты отображения ( для пунктуации он буквальный )
+                replacement_value = config.PATTERN_DISPLAY_MAP_UNICODE.get(replacement_pattern, "")
+            else:
+                replacement_value = ""
+
+            # Обновление LazyFrame (лениво, без материализации полного набора)
             lazy_df = lazy_df.with_columns([
                 pl.col(target_column)
                 .cast(pl.Utf8, strict=False)
                 .fill_null("")
-                .str.replace_all(regex_pattern_to_replace, replacement)
+                .str.replace_all(regex_pattern_to_replace, replacement_value)
                 .alias(target_column)
             ])
 
             logger.debug(
-                f"Применена замена '{get_pattern_name(pattern_to_replace)}' на '{replacement}' в колонке '{target_column}' для LazyFrame")
+                f"Применена замена '{get_pattern_name(pattern_to_replace)}' на '{replacement_value}' в колонке '{target_column}' для LazyFrame")
 
-            # Синхронизация с DataFrame
-            new_df = lazy_df.collect().head(1000)
-            logger.debug(f"DataFrame обновлён из LazyFrame после замены в колонке '{target_column}'")
+            # Синхронизация с DataFrame: используем размер окна, равный текущему origin_df (если есть)
+            old_df = st.session_state.get("df")
+            origin_df = st.session_state.get("origin_df")
+            window_rows = origin_df.height if origin_df is not None else 5000
+            new_df = lazy_df.limit(window_rows).collect(streaming=True)
+            logger.debug(f"DataFrame обновлён из LazyFrame после замены в колонке '{target_column}', строк: {new_df.height}")
 
             # Обновление метаданных
             logger.debug(f"Метаданные до обновления: {columns_data.get(target_column, {})}")
             updated_metadata = replace_patterns_in_metadata(
                 column_metadata=columns_data.get(target_column, {}),
                 pattern_to_replace=pattern_to_replace,
-                replacement=replacement
+                replacement=(replacement_pattern or replacement_value)
             )
             st.session_state.columns_data[target_column] = updated_metadata
 
             logger.info(f"Метаданные для колонки '{target_column}' обновлены: {updated_metadata}")
 
-            selected_patterns_key = f"selected_patterns_{st.session_state.columns_data[target_column].get('hash')}"
+            # Ключ для выбранных паттернов с фолбэком на имя колонки
+            key_component = st.session_state.columns_data.get(target_column, {}).get('hash') or target_column
+            selected_patterns_key = f"selected_patterns_{key_component}"
             if selected_patterns_key not in st.session_state:
                 st.session_state[selected_patterns_key] = st.session_state.columns_data[target_column][
                     "display_patterns"]
 
-            old_df = st.session_state.df
-            temp_concatenated_columns = {
-                col: columns_data[col].copy() for col in old_df.columns
-                if st.session_state.columns_data[col].get("concatenated") is not None
-            }
-
             # Обновление session_state
             st.session_state.lazy_df = lazy_df
-            for col, meta in temp_concatenated_columns.items():
-                new_df = new_df.with_columns(old_df[col])
+            # Сохраняем/возвращаем производные или конкатенированные колонки, которых нет в новом окне
+            if old_df is not None:
+                missing_cols = [c for c in old_df.columns if c not in new_df.columns]
+                if missing_cols:
+                    new_df = new_df.with_columns([old_df[c] for c in missing_cols])
 
             st.session_state.df = new_df
-            st.session_state.origin_df = new_df
+            # origin_df не изменяем, чтобы размер окна оставался консистентным для других шагов
             st.session_state[selected_patterns_key] = st.session_state.columns_data[target_column][
                 "display_patterns"]
 
@@ -117,7 +143,7 @@ def step_format_column_values():
                 logger.info(f"  {name}: {dtype}")
 
             st.success(
-                f"✅ Заменено '{pattern_to_replace}' на '{replacement}' в колонке '{target_column}', метаданные обновлены."
+                f"✅ Заменено '{pattern_to_replace}' на '{replacement_pattern or replacement_value}' в колонке '{target_column}', метаданные обновлены."
             )
             logger.info(f"Успешно завершена замена в колонке '{target_column}'")
 

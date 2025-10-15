@@ -2,6 +2,7 @@ import logging
 import json
 import hashlib
 from pathlib import Path
+import gc
 
 import streamlit as st
 import polars as pl
@@ -13,16 +14,29 @@ from utils import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(config.APP_TITLE)
 
-CACHE_ROOT = Path("analyze_cache")
+# CACHE_ROOT теперь берется из config
 
 
 def analyze_file():
-    if "source_file" not in st.session_state or st.session_state.source_file is None:
-        st.error("Файл не загружен. Перейдите к шагу 1.")
+    if "lazy_df" not in st.session_state or st.session_state.lazy_df is None:
+        st.error("Данные не загружены. Перейдите к шагу 1.")
         return
 
-    st.markdown("# Анализ загруженного файла")
+    st.markdown("# Анализ загруженных данных")
     show_table()
+
+    # Если данные уже загружены из папки, используем их
+    if "columns_data" in st.session_state and st.session_state.columns_data:
+        st.success("✅ Данные колонок уже загружены из файла!")
+        st.info("Метаданные колонок загружены из columns_data.json")
+        
+        # Показываем информацию о колонках
+        if st.session_state.columns_data:
+            st.markdown("### Информация о колонках:")
+            for col, data in st.session_state.columns_data.items():
+                with st.expander(f"📊 {col}"):
+                    st.json(data)
+        return
 
     st.checkbox("Игнорировать кеш", key="ignore_column_cache", value=False)
 
@@ -58,31 +72,54 @@ def analyze_columns(
 
     logger.info(f"Starting column analysis for file: {source_path}")
     try:
-        df = lazy_df.collect()
-        total_columns = len(df.columns)
+        if lazy_df is None:
+            st.error("Данные не загружены для анализа")
+            return
+            
+        # Получаем список колонок без materialize всего набора данных
+        column_names = list(lazy_df.collect_schema().names())
+        total_columns = len(column_names)
         progress_bar = st.progress(0)
 
-        for idx, column in enumerate(df.columns, start=1):
+        for idx, column in enumerate(column_names, start=1):
             logger.info(f"Analyzing column '{column}' in file: {source_path.name}")
-            detected_patterns = pattern_detector.detect_patterns_polars(df, column)
 
+            # Формируем выражения для проверки наличия каждого паттерна в колонке
+            try:
+                exprs = [
+                    pl.col(column).cast(pl.Utf8).str.contains(pattern, literal=False).any().alias(name)
+                    for name, pattern in pattern_detector.regex_patterns.items()
+                ]
+                # Собираем только скалярные результаты (True/False для каждого паттерна)
+                result_df = lazy_df.select(exprs).collect()
+                detected_patterns = {name for name in result_df.columns if bool(result_df[0, name])}
+            except Exception as e:
+                logger.error(f"Failed pattern detection for column '{column}': {e}")
+                detected_patterns = set()
+
+            sorted_patterns = sorted(detected_patterns)
             columns_data[column] = {
                 "hash": short_hash(column),
                 "column": column,
                 "origin_name": column,
                 "display_name": column,
-                "detected_patterns": list(detected_patterns),
-                "prev_selected_patterns": list(detected_patterns),
-                "selected_patterns": list(detected_patterns),
+                "detected_patterns": sorted_patterns,
+                "prev_selected_patterns": sorted_patterns.copy(),
+                "selected_patterns": sorted_patterns.copy(),
                 "detected_display_patterns": [
-                    config.PATTERN_DISPLAY_MAP_UNICODE.get(p, p) for p in detected_patterns
+                    config.PATTERN_DISPLAY_MAP_UNICODE.get(p, p) for p in sorted_patterns
                 ],
                 "display_patterns": [
-                    config.PATTERN_DISPLAY_MAP_UNICODE.get(p, p) for p in detected_patterns
+                    config.PATTERN_DISPLAY_MAP_UNICODE.get(p, p) for p in sorted_patterns
                 ],
                 "mode": "standalone",
                 "concatenated": None,
             }
+
+            # Явно освобождаем временные объекты и чистим GC, чтобы не накапливать память на больших файлах
+            del result_df
+            gc.collect()
+
             progress_bar.progress(idx / total_columns)
 
     except Exception as e:
@@ -92,6 +129,10 @@ def analyze_columns(
 
     st.session_state.columns_data = columns_data
     logger.info("Column analysis completed. Column data saved to session_state.")
+
+    # Дополнительная очистка памяти после завершения анализа всех колонок
+    del columns_data
+    gc.collect()
     return True
 
 
@@ -106,7 +147,7 @@ def get_file_hash(path: Path) -> str:
 def get_cache_path(source_path: Path) -> Path:
     """Путь до файла кеша: cache/<имя_файла>/columns_data.json"""
     safe_name = source_path.stem.replace(" ", "_")
-    cache_dir = CACHE_ROOT / safe_name
+    cache_dir = config.ANALYZE_CACHE_FOLDER / safe_name
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "columns_data.json"
 
@@ -120,7 +161,7 @@ def try_load_cached_columns_data(lazy_df: pl.LazyFrame, file_hash: str, cache_pa
             cache = json.load(f)
 
         cached_columns = set(cache.get("columns_data", {}).keys())
-        current_columns = set(lazy_df.collect_schema().keys())
+        current_columns = set(lazy_df.collect_schema().names())
 
         if cache.get("file_hash") == file_hash and cached_columns == current_columns:
             logger.info("Загружен кеш колонок с совпадающим хэшем файла.")
