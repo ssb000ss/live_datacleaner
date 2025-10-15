@@ -162,7 +162,7 @@ TEMP_FOLDER = get_env_path('TEMP_FOLDER', '') if os.getenv('TEMP_FOLDER') else N
 COMPATIBLE_EXTENSIONS = get_env_list('COMPATIBLE_EXTENSIONS', '.csv,.txt')
 
 # Коды стран для валидации
-ALLOWED_COUNTRY_CODES = get_env_set('ALLOWED_COUNTRY_CODES', 'ru,kz,uz,tm,cn')
+ALLOWED_COUNTRY_CODES = get_env_set('ALLOWED_COUNTRY_CODES', 'ru,kg,uz,tm,ua,by,nl,az')
 
 # Transliteration mapping for Cyrillic to Latin
 CYRILLIC_TO_LATIN_MAPPING = {

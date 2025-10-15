@@ -122,7 +122,28 @@ def replace_empty_with(ldf: pl.LazyFrame, value: str | None = None) -> pl.LazyFr
 def drop_null_rows(ldf: pl.LazyFrame, required_columns: list[str]) -> pl.LazyFrame:
     if not required_columns:
         return ldf
-    return ldf.drop_nulls(subset=required_columns)
+    
+    # Определяем пустые значения
+    empty_values = ["", " ", "nan", "NaN", "none", "None", "null", "NULL", "0"]
+    
+    # Создаем условие для фильтрации строк
+    # Строка должна быть удалена, если хотя бы одна из required_columns пуста или null
+    conditions = []
+    for col in required_columns:
+        condition = (
+            pl.col(col).is_null() | 
+            pl.col(col).cast(pl.Utf8).str.strip_chars().is_in(empty_values) |
+            pl.col(col).cast(pl.Utf8).str.strip_chars().eq("")
+        )
+        conditions.append(condition)
+    
+    # Объединяем условия через OR - если любое поле пустое, строка удаляется
+    combined_condition = conditions[0]
+    for condition in conditions[1:]:
+        combined_condition = combined_condition | condition
+    
+    # Фильтруем строки - оставляем только те, где НЕ выполняется условие пустоты
+    return ldf.filter(~combined_condition)
 
 
 def drop_duplicates(ldf: pl.LazyFrame, unique_columns: list[str]) -> pl.LazyFrame:

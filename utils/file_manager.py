@@ -32,8 +32,11 @@ class FileManager:
             logger.info(f"Detecting encoding [{file_path.name}].")
             rawdata = f.read(sample_size)
             info = chardet.detect(rawdata)
-            detected_encoding = info['encoding'] or "utf-8"
-            
+            if info["confidence"] or 0.1 < 0.7:
+                detected_encoding = "utf-8"
+            else:
+                detected_encoding = info["encoding"] or "utf-8"
+
             # Конвертируем кодировки для совместимости с Polars
             if detected_encoding.lower() in ['utf-8', 'utf8']:
                 self.encoding = "utf8"
